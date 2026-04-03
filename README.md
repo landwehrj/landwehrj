@@ -1,4 +1,6 @@
 # 👾Hello...you've found me.👾
+# 👽Hola... me encontraste.👽
+# 🤖こんにちは... 見つけてくれたんですね🤖
 
 # 🌱🌼🌻🌷🌻🌼🌱
 
