@@ -42,7 +42,7 @@ As an old lady she loved stealing warm computer chairs to become the lead progra
 Emerald eyes are the color of Spring<br>
 And a little pink nose beneath<br>
 The softening folds of snow, ash, and earth mixing<br>
-In the rivers of soft flowing fur inviting...<br>
+In the rivers of soft flowing fur...<br>
 <br>
 83 Waking August 7th –<br>
 <br>
