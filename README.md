@@ -39,77 +39,76 @@ As an old lady she loved stealing warm computer chairs to become the lead progra
 > Farewell, my friend...
 
 # Few old memories with my friend:
-
-Emerald eyes are the color of Spring
-And a little pink nose beneath
-The softening folds of snow, ash, and earth mixing
-In the rivers of soft flowing fur inviting...
-
-83 Waking August 7th –
-
-Eyes open: intro to the symphony of life
-Soft cat curled along the feet
-Warm feelings as we turn
-The expansive blue; falling sky, our view
-
-Believe in serenity: blinking eyes dazed
-Open wide our heart, and closing eyes
-Falling into the darkness
-Pillow soft, tucked beneath the sheets
-
-Content: the landscape of sleep,
-But waking memories in the celestial blue
-The sun shines atop the moon
-Embodying thought: filtering life 
-Before our dreams each morning
-
-171 -
-Cares had drifted
-From our thoughts
-If only as lonely 
-They fell into 
-The quiet night
-
-To let our dreams
-Float among 
-The easel of darkness
-Sheltered by blankets
-Tucked warmly soft 
-
-Around our bodies
-With murmuring breath
-Drawing in life 
-From the grace
-Of our quietness
-
-Among our eyes
-We searched still,
-But we stayed
-Quietly in each
-Others’ thoughts
-
-201 A May Thursday –
-
-Gray clouds stood atop the sky,
-Whispering with a lonely sigh 
-Of the shaking emerald leaves
-
-And a night cat set perched
-Shimmering against the alabaster
-White all along the stone steps
-
-In a moment of a cool day,
-The rain fell, as I held
-A forest dream; My heart swelled
-
-With the little frog, slippery 
-And drenched, enclosed beneath 
-My trembling warm hands
-
-I placed my soul deep into
-The dreary boundless eyes
-Forever I was held, wishing goodbye
-
+Emerald eyes are the color of Spring<br>
+And a little pink nose beneath<br>
+The softening folds of snow, ash, and earth mixing<br>
+In the rivers of soft flowing fur inviting...<br>
+<br>
+83 Waking August 7th –<br>
+<br>
+Eyes open: intro to the symphony of life<br>
+Soft cat curled along the feet<br>
+Warm feelings as we turn<br>
+The expansive blue; falling sky, our view<br>
+<br>
+Believe in serenity: blinking eyes dazed<br>
+Open wide our heart, and closing eyes<br>
+Falling into the darkness<br>
+Pillow soft, tucked beneath the sheets<br>
+<br>
+Content: the landscape of sleep,<br>
+But waking memories in the celestial blue<br>
+The sun shines atop the moon<br>
+Embodying thought: filtering life<br>
+Before our dreams each morning<br>
+<br>
+171 -<br>
+Cares had drifted<br>
+From our thoughts<br>
+If only as lonely<br>
+They fell into<br>
+The quiet night<br>
+<br>
+To let our dreams<br>
+Float among<br>
+The easel of darkness<br>
+Sheltered by blankets<br>
+Tucked warmly soft<br>
+<br>
+Around our bodies<br>
+With murmuring breath<br>
+Drawing in life<br>
+From the grace<br>
+Of our quietness<br>
+<br>
+Among our eyes<br>
+We searched still,<br>
+But we stayed<br>
+Quietly in each<br>
+Others’ thoughts<br>
+<br>
+201 A May Thursday –<br>
+<br>
+Gray clouds stood atop the sky,<br>
+Whispering with a lonely sigh<br> 
+Of the shaking emerald leaves<br>
+<br>
+And a night cat set perched<br>
+Shimmering against the alabaster<br>
+White all along the stone steps<br>
+<br>
+In a moment of a cool day,<br>
+The rain fell, as I held<br>
+A forest dream; My heart swelled<br>
+<br>
+With the little frog, slippery<br> 
+And drenched, enclosed beneath<br> 
+My trembling warm hands<br>
+<br>
+I placed my soul deep into<br>
+The dreary boundless eyes<br>
+Forever I was held, wishing goodbye<br>
+<br>
 # 🌱🌼🌻🌷🌻🌼🌱🌼🌻🌷🌻🌼🌱
 
 [//]: # "[![Top Langs](https://github-readme-stats-git-main-snaphat.vercel.app/api/top-langs/?username=landwehrj&theme=radical&layout=compact)](https://github.com/anuraghazra/github-readme-stats)"
