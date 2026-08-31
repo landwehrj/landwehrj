@@ -35,6 +35,7 @@ As an old lady she loved stealing warm computer chairs to become the lead progra
 <img width="2284" height="1285" alt="image" src="https://github.com/user-attachments/assets/30b44dcd-ff69-49c8-a5bb-6729b9b4a29a" />
 <img width="1803" height="1352" alt="image" src="https://github.com/user-attachments/assets/f5dbbccb-35b1-428a-8d9d-291a5982466d" />
 
+> (02/14/2006-7/23/2026)
 > Farewell, my friend...
 
 # 🌱🌼🌻🌷🌻🌼🌱🌼🌻🌷🌻🌼🌱
