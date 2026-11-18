@@ -30,7 +30,7 @@ def photo_atlas():
 
 
 def score():
-    """Render an original harp nocturne. All the instruments and water are synthesized."""
+    """Render an original harp nocturne. The river ambience plays independently in the browser."""
     rate = 44100
     rng = np.random.default_rng(20060214)
     # Each line is a phrase: seconds, left-hand voicing, then the melody's
@@ -142,14 +142,6 @@ def score():
             chunk = send[offset:offset+block]
             wet = np.fft.irfft(np.fft.rfft(chunk, fft_size)*spectrum, n=fft_size)
             add(mix[:,channel], offset/rate, wet[:len(chunk)+len(impulse)-1])
-
-    # Overlapping, band-limited swells give the bank a quiet moving waterline.
-    window_size = rate*3
-    window = np.hanning(window_size)
-    for i in range(round(length/(window_size/2))):
-        for channel in range(2):
-            water = color_noise(rng.normal(size=window_size), [(710,360,1),(1920,570,.57),(3400,660,.18)])
-            add(mix[:,channel], i*1.5, water*window*rng.uniform(.010,.018))
 
     mix *= .45/np.max(np.abs(mix))
     subprocess.run(['ffmpeg','-loglevel','error','-y','-f','f32le','-ar',str(rate),

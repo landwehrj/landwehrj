@@ -60,6 +60,31 @@
     sound.textContent = playing ? 'Music on' : 'Music off';
     sound.setAttribute('aria-label', playing ? 'Mute ambient music' : 'Play ambient music');
   }
+  const ambienceButton=document.querySelector('#garden-ambience');
+  let wantAmbience=true, ambienceActivated=false;
+  const ambience=createRiverAmbience(()=>{
+    ambienceButton.textContent=ambience.playing?'Ambience on':'Ambience off';
+    ambienceButton.setAttribute('aria-pressed',String(ambience.playing));
+    ambienceButton.setAttribute('aria-label',ambience.playing?'Mute river and footsteps':'Play river and footsteps');
+  });
+  function startAmbience(){
+    if(!wantAmbience || !dialog.open || document.hidden)return;
+    ambienceActivated=true;
+    if(!ambience.playing)ambience.start();
+  }
+  ambienceButton.setAttribute('aria-label','Play river and footsteps');
+  ambienceButton.addEventListener('click',()=>{
+    wantAmbience=!ambience.playing;
+    if(wantAmbience)startAmbience();else ambience.pause();
+  });
+  // Direct links have no entry click to unlock audio. The first walking or
+  // viewing gesture can start the river without starting the music.
+  function activateOnInteraction(e){
+    if(e.target.closest('#garden-ambience, #leave-garden') || e.key==='Escape')return;
+    if(!ambience.playing)startAmbience();
+  }
+  dialog.addEventListener('pointerup',activateOnInteraction);
+  dialog.addEventListener('keydown',activateOnInteraction);
   music.volume = .53;
   music.addEventListener('play', audioLabel);
   music.addEventListener('pause', audioLabel);
@@ -76,6 +101,7 @@
     audioLabel();
   }
   sound.addEventListener('click', () => {
+    startAmbience();
     desiredMusic = music.paused;
     if (desiredMusic) playMusic(); else pauseMusic();
   });
@@ -603,9 +629,18 @@
     new ResizeObserver(resize).observe(view);
     function shortest(a){return Math.atan2(Math.sin(a),Math.cos(a))}
     let guidePoints=[],guideHeading=0,arrival=null;
+    let untilStep=.52;
+    function footfalls(oldX,oldZ){
+      const p=camera.position;
+      untilStep-=Math.hypot(p.x-oldX,p.z-oldZ);
+      if(untilStep<=0){
+        if(wantAmbience)ambience.step(Boolean(riverWalk.roomAt(p.x,p.z)),fastWalk);
+        untilStep+=fastWalk?2.13:1.55;
+      }
+    }
     const releaseControlsAt=16;
     function beginFarewell(){
-      elapsed=0;
+      elapsed=0;untilStep=.52;
       arrival={position:camera.position.clone(),pitch,yaw};
       setGuide(-1);
       held.clear();fastWalk=false;
@@ -652,7 +687,9 @@
       if(d>.01){
         guideHeading=Math.atan2(-dx,-dz);
         const step=Math.min(1,dt*3.25*(fastWalk?2.2:1)/d);
+        const oldX=p.x,oldZ=p.z;
         p.x+=dx*step;p.z+=dz*step;
+        footfalls(oldX,oldZ);
       }
       yaw+=shortest(guideHeading-yaw)*Math.min(1,dt*3.5);
       pitch+=(.015-pitch)*Math.min(1,dt*2);
@@ -661,7 +698,7 @@
     function go(index,reset=false){
       if(reset){arrival=null;walkPanel.inert=false;elapsed=-1;showFinale(-1)}
       if(arrival)return;
-      lastLocation=null;
+      untilStep=.52;lastLocation=null;
       if(index===finalIndex && elapsed<0){
         const [x,z]=trail[0];camera.position.set(x,1.62,z-.65);yaw=0;pitch=-.035;
         current=finalIndex;pathCaption('The long boardwalk','Follow the lanterns downstream');
@@ -681,6 +718,7 @@
       const k=dt*(fastWalk?6.6:3)/Math.max(1,Math.hypot(right,forward)),p=camera.position;
       const dx=(Math.cos(yaw)*right-Math.sin(yaw)*forward)*k;
       const dz=(-Math.sin(yaw)*right-Math.cos(yaw)*forward)*k;
+      const oldX=p.x,oldZ=p.z;
       const steps=Math.ceil(Math.hypot(dx,dz)/.24);
       for(let i=0;i<steps;i++){
         const x=p.x+dx/steps,z=p.z+dz/steps;
@@ -688,6 +726,7 @@
         else if(riverWalk.walkable(x,p.z))p.x=x;
         else if(riverWalk.walkable(p.x,z))p.z=z;
       }
+      footfalls(oldX,oldZ);
     }
     function pathCaption(title,detail){
       if(lastLocation===detail && enlarge.hidden)return;
@@ -806,7 +845,7 @@
     if(dialog.open)return;
     dialog.showModal();
     select(0);
-    if(userGesture)playMusic();
+    if(userGesture){playMusic();startAmbience()}
     if(garden){garden.resize();garden.go(0,true);startFrames()}
     else prepare();
     if(!view.hidden)view.focus({preventScroll:true});
@@ -827,6 +866,7 @@
   dialog.addEventListener('cancel',e=>{e.preventDefault();leave()});
   dialog.addEventListener('close',()=>{
     stopFrames();walkPanel.inert=false;pauseMusic();music.currentTime=0;
+    ambienceActivated=false;ambience.pause();
     entrance?.focus({preventScroll:true});
   });
   document.querySelector('#leave-garden').addEventListener('click',leave);
@@ -861,8 +901,8 @@
   });
   window.addEventListener('blur',()=>{held.clear();fastWalk=false});
   document.addEventListener('visibilitychange',()=>{
-    if(document.hidden){stopFrames();pauseMusic()}
-    else if(dialog.open){startFrames();playMusic()}
+    if(document.hidden){stopFrames();pauseMusic();ambience.pause()}
+    else if(dialog.open){startFrames();playMusic();if(ambienceActivated)startAmbience()}
   });
   if(matchMedia('(pointer:coarse)').matches){
     document.querySelector('#garden-directions').textContent='Hold arrows to walk · Drag to look';

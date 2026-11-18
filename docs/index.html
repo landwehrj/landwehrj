@@ -13,6 +13,8 @@
 <script defer src="desk.js"></script>
 <script defer src="river-walk.js"></script>
 <script defer src="river-portrait.js"></script>
+<script defer src="river-sounds.js"></script>
+<script defer src="river-audio.js?v=quiet-lapping"></script>
 <script defer src="garden.js"></script>
 </head>
 <body>
@@ -51,7 +53,10 @@
   <div class="garden-top">
     <button id="leave-garden" class="garden-pill">← Her desk</button>
     <h2 id="garden-title">The lantern river</h2>
-    <button id="garden-sound" class="garden-pill" aria-pressed="false">Music off</button>
+    <div class="garden-audio">
+      <button id="garden-sound" class="garden-pill" aria-pressed="false">Music off</button>
+      <button id="garden-ambience" class="garden-pill" aria-pressed="false">Ambience off</button>
+    </div>
   </div>
   <div class="garden-bottom">
     <div class="garden-caption">
@@ -74,7 +79,7 @@
       </div>
     </div>
   </div>
-  <audio id="garden-music" loop preload="none" src="lantern-garden.mp3?v=harp"></audio>
+  <audio id="garden-music" loop preload="none" src="lantern-garden.mp3?v=harp-solo"></audio>
 </dialog>
 <dialog id="viewer" aria-labelledby="dialog-title"><div class="dialoghead"><h2 id="dialog-title"></h2><button class="close" aria-label="Close and return">×</button></div>
 <div id="gallery"><figure><img id="photo" alt=""><figcaption id="caption"></figcaption></figure>
