@@ -129,17 +129,11 @@
     const waterLevel=-.43;
     const nightTime={value:0};
     scene.background=color('#060e22');
-    scene.fog=new T.FogExp2(color('#152737'),.010);
+    scene.fog=new T.FogExp2(color('#1a2d42'),.013);
     const hemi=new T.HemisphereLight(color('#a5c4ee'),color('#455362'),.65);
     const blueLight=new T.DirectionalLight(color('#92bfe5'),1.28);
     blueLight.position.set(-20,28,-35);
     scene.add(hemi,blueLight);
-    // Reuse a fixed light budget across the whole walk, including the mirror pass.
-    const lampLights=Array.from({length:10},()=>{
-      const light=new T.PointLight(color('#ffb46a'),0,11,2);
-      scene.add(light);
-      return light;
-    });
     const reflectionLayer=1;
     const reflected=obj=>{obj.layers.enable(reflectionLayer);return obj};
 
@@ -265,7 +259,7 @@
           vec2 uv=.5+.5*reflected.xy/reflected.w;
           vec2 offset=vec2(.0026*wave+.0018*sin(swell),.0038*waveSlope)
                      *mix(.7,1.25,grazing)*mix(1.,.32,still);
-          vec2 blur=max(reflectionPixel*1.2,vec2(.0019,.0035)*mix(1.,1.8,grazing));
+          vec2 blur=max(reflectionPixel*1.2,vec2(.0015,.0046)*mix(1.,1.65,grazing));
           vec3 lights=reflectedLight(clamp(uv+offset,blur,1.-blur),blur);
           float fresnel=.19+.77*pow(grazing,4.0);
           float warm=max(0.,lights.r-lights.b);
@@ -287,7 +281,8 @@
                 +(lights*.10+vec3(.022,.043,.060)*glint)*strength;
           }
         }
-        gl_FragColor=vec4(river,1.);
+          river=mix(river,navy+vec3(.012,.023,.036),smoothstep(25.,125.,dist)*.50);
+          gl_FragColor=vec4(river,1.);
         #include <encodings_fragment>
         }`
     }));
@@ -299,15 +294,23 @@
     });
     const batches=new Map();
     const cube=new T.BoxGeometry(1,1,1);
-    const limestone=painted(256,(ctx,n)=>{
-      ctx.fillStyle='#e6e4db';ctx.fillRect(0,0,n,n);
-      for(let i=0;i<5000;i++){
+    const limestone=painted(512,(ctx,n)=>{
+      ctx.fillStyle='#b6bac0';ctx.fillRect(0,0,n,n);
+      for(let i=0;i<2400;i++){
+        const x=rand()*n,y=rand()*n,r=5+rand()*40;
+        const speck=ctx.createRadialGradient(x,y,0,x,y,r);
+        speck.addColorStop(0,i%3?'#78879013':'#edebdc32');
+        speck.addColorStop(1,'#9aa1a000');
+        ctx.fillStyle=speck;ctx.fillRect(x-r,y-r,2*r,2*r);
+      }
+      for(let i=0;i<6800;i++){
         ctx.fillStyle=i%3?'#6e675512':'#ffffff38';
         ctx.fillRect(rand()*n,rand()*n,1+rand()*3,1+rand()*1.5);
       }
     });
-    const stone = new T.MeshStandardMaterial({map:limestone,color:color('#465365'),roughness:.80});
-    const edge = new T.MeshStandardMaterial({map:limestone,color:color('#849fa8'),roughness:.56});
+    limestone.wrapS=limestone.wrapT=T.RepeatWrapping;
+    const stone = new T.MeshStandardMaterial({map:limestone,color:color('#89939e'),roughness:.86});
+    const edge = new T.MeshStandardMaterial({map:limestone,color:color('#849fa8'),roughness:.64});
     const bronze = new T.MeshStandardMaterial({color:color('#bc9b71'),roughness:.43,metalness:.28});
     const plinth = new T.MeshStandardMaterial({color:color('#44535a'),roughness:.95});
     const linen = new T.MeshStandardMaterial({color:color('#bdd1cb'),roughness:1});
@@ -369,6 +372,89 @@
       lanterns.push(lamp);
       if(fixture)fixtures.push(lamp);
     }
+    function lightArchitecture(materials){
+      // Each strip of the river knows every lamp that can reach it. Picking
+      // lights at the surface keeps the galleries lit from every viewpoint.
+      const first=-218,cell=4,cells=60,range=7.3;
+      const rows=Array.from({length:cells},(_,i)=>{
+        const low=first+i*cell;
+        return fixtures.filter(lamp=>lamp.z>=low-range && lamp.z<=low+cell+range);
+      });
+      const slots=Math.max(...rows.map(row=>row.length));
+      const pixels=new Uint8Array(cells*slots*8);
+      rows.forEach((row,i)=>row.forEach((lamp,j)=>{
+        const index=(i*slots+j)*8;
+        // Pack two bytes per coordinate for stable positions on WebGL 1 and 2.
+        const coords=[(lamp.x+32)/64,(lamp.y+.31*lamp.size)/8,(lamp.z+224)/256];
+        coords.forEach((coord,axis)=>{
+          const value=Math.round(T.MathUtils.clamp(coord,0,1)*65535);
+          pixels[index+axis]=value>>8;
+          pixels[index+axis+4]=value&255;
+        });
+        pixels[index+3]=Math.round(lamp.size*128);
+      }));
+      const lightmap=new T.DataTexture(pixels,slots*2,cells,T.RGBAFormat);
+      lightmap.needsUpdate=true;
+      const warm={value:color('#ffc094')};
+      for(const material of materials){
+        const isStone=material.map===limestone;
+        material.customProgramCacheKey=()=>isStone?'river-stone':'river-lanterns';
+        material.onBeforeCompile=shader=>{
+          shader.uniforms.riverFixtures={value:lightmap};
+          shader.uniforms.riverFixtureColor=warm;
+          shader.uniforms.riverFixtureTime=nightTime;
+          shader.vertexShader='varying vec3 riverSurface;\n'+shader.vertexShader.replace(
+            '#include <worldpos_vertex>',
+            `#include <worldpos_vertex>
+            vec4 riverPoint=vec4(transformed,1.);
+            #ifdef USE_INSTANCING
+              riverPoint=instanceMatrix*riverPoint;
+            #endif
+            riverSurface=(modelMatrix*riverPoint).xyz;`
+          );
+          shader.fragmentShader=`uniform sampler2D riverFixtures;
+            uniform vec3 riverFixtureColor;
+            uniform float riverFixtureTime;
+            varying vec3 riverSurface;\n`+shader.fragmentShader.replace(
+            '#include <lights_fragment_begin>',
+            `#include <lights_fragment_begin>
+            float riverCell=floor((riverSurface.z-(${first.toFixed(1)}))/${cell.toFixed(1)});
+            if(riverCell>=0. && riverCell<${cells.toFixed(1)}){
+              float row=(riverCell+.5)/${cells.toFixed(1)};
+              for(int slot=0;slot<${slots};slot++){
+                float col=(float(slot)*2.+.5)/${(slots*2).toFixed(1)};
+                vec4 packedLamp=texture2D(riverFixtures,vec2(col,row));
+                if(packedLamp.a<=0.)break;
+                vec3 fine=texture2D(riverFixtures,vec2(col+1./${(slots*2).toFixed(1)},row)).rgb;
+                vec3 lamp=(packedLamp.rgb*256.+fine)/257.*vec3(64.,8.,256.)-vec3(32.,0.,224.);
+                vec3 delta=lamp-riverSurface;
+                float dist=length(delta);
+                float fade=1.-smoothstep(4.0,${range.toFixed(1)},dist);
+                float flame=1.+.032*sin(riverFixtureTime*3.4+lamp.z*1.31);
+                directLight.direction=mat3(viewMatrix)*(delta/max(dist,.001));
+                directLight.color=riverFixtureColor*34.*packedLamp.a*flame*fade/(dot(delta,delta)+1.05);
+                directLight.visible=fade>0.;
+                RE_Direct(directLight,geometry,material,reflectedLight);
+              }
+            }`
+          );
+          if(isStone){
+            // Project against the world axes so stretching the base geometry
+            // never stretches the finish. Blend the projections on the bevels.
+            shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`
+              vec3 stoneAxis=abs(inverseTransformDirection(normalize(vNormal),viewMatrix));
+              vec3 stoneWeight=pow(stoneAxis,vec3(7.0));
+              stoneWeight/=dot(stoneWeight,vec3(1.0));
+              vec3 grainUV=riverSurface*.91;
+              vec4 grain=texture2D(map,grainUV.zy)*stoneWeight.x
+                        +texture2D(map,grainUV.xz)*stoneWeight.y
+                        +texture2D(map,grainUV.xy)*stoneWeight.z;
+              diffuseColor*=mapTexelToLinear(grain);
+            `);
+          }
+        };
+      }
+    }
     // Tiered evergreens and a second, hazier tree line give the banks depth.
     const crownProfile=[
       [0,.55],[.29,.35],[.54,.09],[.71,-.20],[1,-.42],[.62,-.47],[0,-.42]
@@ -402,7 +488,7 @@
     // Thousands of distant envelopes use one point draw per pass. Their real
     // positions also render into the river reflection, including on camera turns.
     const cloudPositions=[],cloudData=[];
-    for(let i=0;i<3200;i++){
+    for(let i=0;i<1150;i++){
       const side=rand()<.63?-1:1;
       const upstream=rand()<.80;
       const z=upstream?-14-rand()*222:rand()*88-7;
@@ -413,7 +499,7 @@
       cloudData.push(.17+Math.pow(rand(),2)*.49,rand()*fullTurn,rand(),rising?1:0);
     }
     // A smaller release drifts across the channel rather than tracing a hard edge at the bank.
-    for(let i=0;i<560;i++){
+    for(let i=0;i<175;i++){
       const h=5+35*rand(),z=-45-58*rand();
       cloudPositions.push(riverCenter(z)+(rand()-.5)*(12+h*.82),h,z);
       cloudData.push(.13+.27*rand(),rand()*fullTurn,rand(),1);
@@ -434,8 +520,8 @@
         }
         p.x+=.18*sin(time*.27+lanternData.y);p.y+=.25*sin(time*.31+lanternData.y);
         vec4 mv=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*mv;
-        gl_PointSize=clamp(lanternData.x*viewportHeight*projectionMatrix[1][1]/max(1.,-mv.z),2.6,26.);
-        visibility*=1.-.6*smoothstep(22.,138.,-mv.z);
+        gl_PointSize=clamp(lanternData.x*viewportHeight*projectionMatrix[1][1]/max(1.,-mv.z),1.7,22.);
+        visibility*=1.-.82*smoothstep(17.,116.,-mv.z);
         tint=lanternData.z;}`,
       fragmentShader:`varying float tint,visibility;void main(){
         vec2 p=gl_PointCoord*2.-1.;float d=length(p*vec2(1.33,1.));
@@ -462,24 +548,56 @@
       ctx.fillStyle=g;ctx.fillRect(0,0,n,n);
     });
     const contact=new T.MeshBasicMaterial({map:contactMap,transparent:true,depthWrite:false});
-    const cedarMap=painted(256,(ctx,n)=>{
-      ctx.fillStyle='#bba392';ctx.fillRect(0,0,n,n);
-      for(let i=0;i<1450;i++){
-        const x=rand()*n,y=rand()*n, length=17+rand()*140;
-        ctx.fillStyle=i%3?'#472f2121':'#e8c4a328';
-        ctx.fillRect(x,y,.45+rand(),length);
+    const cedarMap=painted(512,(ctx,n)=>{
+      const grain=ctx.createLinearGradient(0,0,n,0);
+      grain.addColorStop(0,'#826351');grain.addColorStop(.22,'#ab8e71');
+      grain.addColorStop(.61,'#997657');grain.addColorStop(1,'#785e4b');
+      ctx.fillStyle=grain;ctx.fillRect(0,0,n,n);
+      const knots=Array.from({length:4},()=>[rand()*n,rand()*n]);
+      for(let i=0;i<950;i++){
+        const x=rand()*n,phase=rand()*fullTurn,length=18+rand()*130;
+        const from=rand()*n;
+        ctx.strokeStyle=i%4?'rgba(46,28,25,.081)':'rgba(236,205,160,.117)';
+        ctx.lineWidth=.22+rand()*.78;
+        ctx.beginPath();
+        for(let y=from;y<from+length;y+=5){
+          let u=x+1.2*Math.sin(y*.044+phase)+2.8*Math.sin(y*.013);
+          for(const [kx,ky] of knots){
+            const dx=x-kx,dy=(y-ky)*.42;
+            u+=dx*2.2*Math.exp(-(dx*dx+dy*dy)/675);
+          }
+          if(y===from)ctx.moveTo(u,y);else ctx.lineTo(u,y);
+        }
+        ctx.stroke();
+      }
+      for(const [x,y] of knots){
+        ctx.save();ctx.translate(x,y);ctx.scale(1,2.8);
+        for(let r=13;r>2;r-=2.5){
+          ctx.strokeStyle='rgba(55,35,29,.21)';ctx.lineWidth=.75;
+          ctx.beginPath();ctx.ellipse(0,0,r,r*.67,-.17,0,fullTurn);ctx.stroke();
+        }
+        ctx.restore();
       }
     });
-    const timberMap=painted(512,(ctx,n)=>{
-      ctx.fillStyle='#78807a';ctx.fillRect(0,0,n,n);
-      for(let i=0;i<18;i++){
-        const z=i*n/18;
-        ctx.fillStyle=['#85877b','#797c71','#80847c','#767d76'][i%4];
-        ctx.fillRect(0,z,n,n/18);
-        ctx.fillStyle='#404b48';ctx.fillRect(0,z,n,1.8);
-        for(let j=0;j<38;j++){
-          ctx.fillStyle=j%2?'#c1b8a628':'#313d3820';
-          ctx.fillRect(rand()*n,z+rand()*n/18,10+rand()*110,.75);
+    const timberMap=painted(1024,(ctx,n)=>{
+      const boards=18, pitch=n/boards;
+      for(let i=0;i<boards;i++){
+        const z=i*pitch,split=n*(.18+rand()*.65);
+        ctx.fillStyle=['#8c8377','#9a8f7d','#8a857b','#a19985','#807f75'][i%5];
+        ctx.fillRect(0,z,n,pitch);
+        ctx.fillStyle=i%2?'#d2ba9618':'#32251c13';
+        ctx.fillRect(split,z,n-split,pitch);
+        ctx.fillStyle='#312d2b';ctx.fillRect(0,z,n,2.4);ctx.fillRect(split,z,1.5,pitch);
+        ctx.fillStyle='#d4c3a957';ctx.fillRect(0,z+2.4,n,.8);
+        for(let j=0;j<115;j++){
+          const x=rand()*n,y=z+3+rand()*(pitch-4),length=4+rand()*160;
+          ctx.strokeStyle=j%3?'#493d321f':'#e9d8b523';ctx.lineWidth=.36+rand()*.68;
+          ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+length/2,y+rand()*2-1,x+length,y+.4);ctx.stroke();
+        }
+        ctx.fillStyle='#453c3590';
+        for(const x of [8,split-5,split+6,n-9]){
+          ctx.beginPath();ctx.ellipse(x,z+pitch*.24,1.5,1.9,0,0,fullTurn);ctx.fill();
+          ctx.beginPath();ctx.ellipse(x,z+pitch*.77,1.5,1.9,0,0,fullTurn);ctx.fill();
         }
       }
     });
@@ -487,9 +605,81 @@
       map:timberMap,bumpMap:timberMap,bumpScale:.032,roughness:.63,color:color('#b9b7b0')
     });
     timberMap.wrapS=timberMap.wrapT=T.RepeatWrapping;
-    const blueTiles=new T.MeshStandardMaterial({map:limestone,color:color('#486679'),roughness:.8});
+    const tiles=painted(256,(ctx,n)=>{
+      for(let i=0;i<7;i++)for(let j=-1;j<6;j++){
+        const x=(j+.5*(i%2))*n/5,y=i*n/7;
+        ctx.fillStyle=['#7c8694','#697685','#909aa5','#758797'][(i+j+8)%4];
+        ctx.fillRect(x,y,n/5,n/7);
+        ctx.fillStyle='#3c4653';ctx.fillRect(x,y,n/5,2.5);ctx.fillRect(x,y,1.4,n/7);
+        ctx.fillStyle='#b6bec5';ctx.fillRect(x+1.4,y+2.5,n/5-1.4,1.3);
+      }
+      for(let i=0;i<3000;i++){
+        ctx.fillStyle=i%2?'#17202c12':'#e7e9dc17';ctx.fillRect(rand()*n,rand()*n,2,1);
+      }
+    });
+    tiles.wrapS=tiles.wrapT=T.RepeatWrapping;
+    const blueTiles=new T.MeshStandardMaterial({map:tiles,bumpMap:tiles,bumpScale:.014,color:color('#577388'),roughness:.68});
     const cedar=new T.MeshStandardMaterial({map:cedarMap,bumpMap:cedarMap,bumpScale:.014,color:color('#b58d72'),roughness:.62});
     const railCap=new T.MeshStandardMaterial({color:color('#c18b54'),roughness:.41,metalness:.2});
+    function chamferedBlock(radius){
+      const half=.5-radius;
+      const shape=new T.Shape();
+      shape.moveTo(-half,-half);shape.lineTo(half,-half);shape.lineTo(half,half);
+      shape.lineTo(-half,half);shape.closePath();
+      const geometry=new T.ExtrudeGeometry(shape,{
+        depth:2*half,bevelEnabled:true,bevelSize:radius,bevelThickness:radius,bevelSegments:2
+      });
+      geometry.translate(0,0,-half);
+      const uvs=geometry.getAttribute('uv');
+      for(let v=0;v<uvs.count;v++)uvs.setXY(v,uvs.getX(v)+.5,uvs.getY(v)+.5);
+      return geometry;
+    }
+    const beam=chamferedBlock(.063), trim=chamferedBlock(.035);
+    const plaster=new T.MeshStandardMaterial({map:limestone,color:color('#76858e'),roughness:.78});
+    const darkTimber=new T.MeshStandardMaterial({map:cedarMap,bumpMap:cedarMap,bumpScale:.018,color:color('#644b45'),roughness:.68});
+    const profiles=[
+      [[-1,-.13],[0,1.15],[1,-.13]],
+      [[-1,.15],[-.78,.02],[-.47,.20],[0,.83],[.47,.20],[.78,.02],[1,.15]],
+      [[-1,-.07],[-.62,.16],[-.38,.79],[.38,.79],[.62,.16],[1,-.07]],
+      [[-1,-.12],[-.28,.29],[.49,.77],[1,1.02]],
+      Array.from({length:11},(_,i)=>{const x=i/5-1;return [x,.05+.82*Math.sqrt(1-x*x)]})
+    ];
+    function galleryRoof(room,height,profile,roof,overhang){
+      const {x,z,width,depth}=room;
+      const half=width/2+overhang;
+      const section=new T.Shape();
+      section.moveTo(-half,profile[0][1]);
+      for(const [u,y] of profile.slice(1))section.lineTo(u*half,y);
+      for(const [u,y] of [...profile].reverse())section.lineTo(u*half,y-.14);
+      section.closePath();
+      const span=depth+overhang*2;
+      const cover=new T.Mesh(new T.ExtrudeGeometry(section,{
+        depth:span,bevelEnabled:true,bevelSize:.022,bevelThickness:.022,bevelSegments:2
+      }),roof);
+      cover.position.set(x,height+.28,z-span/2);
+      scene.add(reflected(cover));
+      for(let i=1;i<profile.length;i++){
+        const [u0,y0]=profile[i-1],[u1,y1]=profile[i];
+        const dx=(u1-u0)*half,dy=y1-y0;
+        const midX=x+(u0+u1)*half/2,midY=height+.16+(y0+y1)/2;
+        const pitch=Math.atan2(dy,dx),length=Math.hypot(dx,dy);
+        // Fascia and the exposed ends of the rafters follow the roof pitch.
+        for(const end of [-1,1]){
+          batch(beam,darkTimber,midX,midY,z+end*span/2,length,.16,.13,0,pitch);
+        }
+        const intervals=Math.ceil(depth/2.1);
+        for(let r=0;r<=intervals;r++){
+          batch(trim,cedar,midX,midY-.07,z+(r/intervals-.5)*depth,length,.15,.13,0,pitch);
+        }
+      }
+      for(const side of [-1,1]){
+        const y=profile[side===1?profile.length-1:0][1];
+        batch(beam,darkTimber,x+side*half,height+.11+y,z,.15,.22,span+.14);
+        for(const end of [-1,1]){
+          batch(trim,bronze,x+side*half,height+.12+y,z+end*span/2,.17,.21,.15);
+        }
+      }
+    }
     const stations=[];
     function photoGeometry(id,w,h){
       const [ax,ay,aw,ah]=atlas.regions[id],geo=new T.PlaneGeometry(w,h),uv=geo.attributes.uv;
@@ -509,31 +699,41 @@
     }
     rooms.forEach((room,r)=>{
       const {x,z,width:w,depth:d}=room, h=[3.5,3.23,4.05,3.65,3.25][r];
-      const roof=r%2?cedar:blueTiles;
+      const roof=r===1 || r===3?cedar:blueTiles;
+      galleryRoof(room,h,profiles[r],roof,[.42,.64,.63,.32,.53][r]);
       batch(cube,timber,x,-.16,z,w,.32,d);
       for(const side of [-1,1]){
         const wallX=x+side*(w/2-.13);
-        batch(cube,stone,wallX,.42,z,.28,.85,d);
-        batch(poolGeo,contact,wallX-side*.11,.007,z,1.17,1,d);
-        batch(cube,edge,wallX,.85,z,.35,.08,d);
-        batch(cube,roof,wallX,h,z,.28,.34,d+.65);
-        // A raised ridge and deep eaves frame the water through each gallery.
-        batch(cube,roof,x+side*w*.26,h+.52,z,w*.54,.17,d+.7,0,-side*.18);
-        batch(cube,cedar,x+side*w*.5,h+.30,z,.23,.20,d+.74);
-        for(const dz of [-d/2,0,d/2]){
-          batch(cube,cedar,wallX,h*.5,z+dz,.24,h,.24);
-          batch(cube,bronze,wallX,.95,z+dz,.26,.072,.26);
+        batch(beam,stone,wallX,.24,z,.30,.49,d);
+        batch(trim,plaster,wallX,.59,z,.31,.25,d);
+        batch(trim,edge,wallX,.755,z,.40,.086,d+.06);
+        batch(poolGeo,contact,wallX-side*.19,.007,z,1.42,1,d-.22);
+        batch(beam,darkTimber,wallX,h,z,.28,.27,d+.32);
+        const uprights=r===2?[-d/2,-d/4,d/4,d/2]:[-d/2,0,d/2];
+        for(const dz of uprights){
+          batch(beam,cedar,wallX,h*.5,z+dz,.29,h,.28);
+          batch(beam,stone,wallX,.27,z+dz,.41,.45,.40);
+          batch(trim,bronze,wallX,.84,z+dz,.34,.062,.34);
+          batch(trim,darkTimber,wallX,h-.19,z+dz,.41,.17,.40);
+          batch(poolGeo,contact,wallX-side*.21,.009,z+dz,.94,1,.94);
         }
         for(const dz of [-d/2,d/2]){
           const wing=w/2-1.65;
-          batch(cube,stone,x+side*(1.65+wing/2),.43,z+dz,wing,.86,.24);
-          batch(cube,edge,x+side*(1.65+wing/2),.87,z+dz,wing,.07,.34);
-          batch(cube,cedar,x+side*1.65,h*.5,z+dz,.20,h,.22);
-          batch(cube,bronze,x+side*1.65,h-.30,z+dz,.26,.078,.26);
+          const wingX=x+side*(1.65+wing/2);
+          const post=x+side*1.65;
+          batch(beam,stone,wingX,.29,z+dz,wing,.57,.25);
+          batch(trim,plaster,wingX,.665,z+dz,wing,.21,.28);
+          batch(trim,edge,wingX,.808,z+dz,wing+.07,.072,.37);
+          batch(beam,cedar,post,h*.5,z+dz,.25,h,.27);
+          batch(trim,stone,post,.245,z+dz,.33,.40,.33);
+          batch(trim,bronze,post,h-.30,z+dz,.30,.078,.31);
+          batch(poolGeo,contact,post,.01,z+dz-Math.sign(dz)*.28,.91,1,.96);
+          batch(trim,darkTimber,post+side*.27,h-.38,z+dz,.90,.115,.20,0,side*.79);
         }
       }
       for(const dz of [-d/2,d/2]){
-        batch(cube,cedar,x,h,z+dz,w,.18,.24);
+        batch(beam,cedar,x,h,z+dz,w,.20,.27);
+        batch(trim,darkTimber,x,h+.14,z+dz,w,.071,.29);
         lantern(x-1.22,h-.85,z+dz,.67,true);
         lantern(x+1.22,h-.85,z+dz,.67,true);
       }
@@ -560,14 +760,17 @@
         const pz=z+d/2-(Math.floor(j/2)+.5)*d/count, px=x+side*(w/2-.39);
         const angle=-side*Math.PI/2,[,,aw,ah]=atlas.regions[id];
         const ph=Math.min(1.72,2.48*ah/aw),pw=ph*aw/ah,mid=1.86;
-        batch(cube,cedar,px+.09*side,mid,pz,pw+.34,ph+.34,.14,angle);
-        batch(cube,linen,px,mid,pz,pw+.14,ph+.14,.06,angle);
+        batch(beam,darkTimber,px+.14*side,mid,pz,pw+.42,ph+.42,.16,angle);
+        batch(trim,cedar,px+.078*side,mid,pz,pw+.31,ph+.31,.15,angle);
+        batch(trim,bronze,px+.039*side,mid,pz,pw+.19,ph+.19,.097,angle);
+        batch(trim,linen,px,mid,pz,pw+.14,ph+.14,.06,angle);
         for(const dz of [-pw*.36,pw*.36])batch(cube,bronze,px+.13*side,mid*.5,pz+dz,.065,mid,.065);
         const pic=new T.Mesh(photoGeometry(id,pw,ph),photoMat);
         pic.position.set(px-.043*side,mid,pz);pic.rotation.y=angle;pic.userData.index=stations.length;
         scene.add(pic);portraits.push(pic);stations.push({x:px-side*3.55,z:pz,angle,room});
         lantern(px-side*.54,2.45,pz+pw/2+.38,.54,true);
         batch(poolGeo,poolMat,px-side*.5,.013,pz,1.6,1,1.6);
+        batch(poolGeo,contact,px-side*.20,.011,pz,1.0,1,pw+.53);
       });
     });
     const landingDepth=4.7;
@@ -664,6 +867,7 @@
       const angle=fullTurn*(i+rand()*.7)/44,dist=14+rand()*15;
       lantern(Math.sin(angle)*dist,4+rand()*7,-Math.cos(angle)*dist,.55+rand()*1.12);
     }
+    lightArchitecture([stone,edge,bronze,plinth,linen,photoMat,timber,blueTiles,cedar,railCap,plaster,darkTimber]);
     const lanternMeshes=pieces.map(([geometry,material])=>{
       const group=new T.InstancedMesh(geometry,material,lanterns.length);
       group.frustumCulled=false;scene.add(reflected(group));return group;
@@ -763,22 +967,7 @@
     const poolHit=new T.Vector3();
     const canvas=renderer.domElement;
     canvas.setAttribute('aria-hidden','true');view.appendChild(canvas);
-    function updateFixtureLights(){
-      fixtures.forEach(lamp=>{
-        lamp.distance=Math.hypot(lamp.x-camera.position.x,lamp.z-camera.position.z);
-      });
-      fixtures.sort((a,b)=>a.distance-b.distance);
-      lampLights.forEach((light,i)=>{
-        const lamp=fixtures[i];
-        if(!lamp){light.intensity=0;return}
-        light.position.copy(lamp.glow.position);
-        const flicker=1+.048*Math.sin(nightTime.value*3.3+lamp.phase)+.023*Math.sin(nightTime.value*9.6+lamp.phase);
-        light.intensity=29*lamp.size*flicker*(1-T.MathUtils.smoothstep(lamp.distance,9,20));
-      });
-    }
-
     function draw(){
-      updateFixtureLights();
       sky.position.set(camera.position.x,0,camera.position.z);
       camera.updateMatrixWorld();
       camera.getWorldDirection(gaze);gaze.y=-gaze.y;
