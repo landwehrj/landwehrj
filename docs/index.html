@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f7f4eb">
+<title>The Lead Programmer’s Chair</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script defer src="vendor/three.min.js"></script>
+<script defer src="coat.js"></script>
+<script defer src="memorial.js"></script>
+<script defer src="desk.js"></script>
+<script defer src="river-walk.js"></script>
+<script defer src="river-portrait.js"></script>
+<script defer src="garden.js"></script>
+</head>
+<body>
+<header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
+<nav aria-label="Memorial"><a href="#album">Photo album</a><button data-open="poems">Notebook</button></nav></div></header>
+<main id="desk">
+<div class="hero">
+<div class="intro">
+<p class="dates"><span aria-hidden="true"></span> Feb 14, 2006 — Jul 23, 2026</p>
+<h1>The Lead <br>Programmer’s<br><em>Chair.</em></h1>
+<p class="dedication">In memory of the best pair programmer<br class="wide"> of 20 years.</p>
+<a class="primary" href="#memorial" data-enter-garden>Enter her memorial <span aria-hidden="true">↗</span></a>
+</div>
+<div class="vignette">
+<div id="stage" role="group" aria-label="Interactive miniature of her desk, monitor, notebook, and chair">
+<img class="poster" src="desk-preview.webp" alt="A miniature wooden desk with a glowing monitor, an open notebook, and her calico figure asleep in the chair.">
+<button class="spot monitor" data-open="monitor" aria-label="Open monitor photo album" title="Monitor photos">+</button>
+<button class="spot notebook" data-open="poems" aria-label="Open notebook of poems" title="Notebook">+</button>
+<a class="spot chair" href="#memorial" data-enter-garden aria-label="Enter her lantern memorial" title="Enter her memorial">+</a>
+</div>
+<p class="hint"><span aria-hidden="true">⤾</span> <span id="turn-hint" hidden>Drag to turn · </span>Select an object to explore</p>
+</div>
+</div>
+<section class="album" id="album" aria-labelledby="album-heading">
+<div class="sectionhead"><h2 id="album-heading">From the photo album</h2><button class="textbutton" data-open="all">View all 17 photos <span aria-hidden="true">↗</span></button></div>
+<div class="cards">
+<button class="card" data-open="kitten"><div class="print"><img src="photos/06.webp" alt="As a kitten, stretching her white paws across the desk"></div><span>Early days</span><small>The kitten on guard</small></button>
+<button class="card" data-open="work"><div class="print"><img src="photos/09.webp" alt="Together at the computer chair"></div><span>Keeping watch</span><small>At the computer, from all sides</small></button>
+<button class="card" data-open="chair"><div class="print"><img src="photos/17.webp" alt="Asleep in the computer chair, one paw dangling"></div><span>The warm chair</span><small>Becoming the lead programmer</small></button>
+</div></section>
+</main>
+<footer><em>Farewell, my friend...</em><span>2006 — 2026</span></footer>
+<dialog id="memorial" aria-labelledby="garden-title">
+  <div class="garden-view" tabindex="0" aria-label="Walkable riverside memorial" aria-describedby="garden-directions"></div>
+  <div class="garden-fallback" hidden><img alt=""><img class="fallback-reflection" alt="" aria-hidden="true"><canvas class="fallback-sky" width="520" height="320" aria-hidden="true"></canvas></div>
+  <div class="garden-top">
+    <button id="leave-garden" class="garden-pill">← Her desk</button>
+    <h2 id="garden-title">The lantern river</h2>
+    <button id="garden-sound" class="garden-pill" aria-pressed="false">Music off</button>
+  </div>
+  <div class="garden-bottom">
+    <div class="garden-caption">
+      <p id="garden-count"></p>
+      <h3 id="garden-caption"></h3>
+      <div class="garden-actions">
+        <button id="garden-prev" aria-label="Visit previous photograph">←</button>
+        <button id="garden-enlarge" data-open="all" data-photo="17">View photograph</button>
+        <button id="garden-next" aria-label="Visit next photograph">→</button>
+      </div>
+    </div>
+    <div class="garden-movement">
+      <button class="garden-pill" id="garden-guide" aria-pressed="false">Follow the river</button>
+      <p id="garden-directions">WASD to walk · Hold Shift to move faster · Drag to look</p>
+      <div class="walk-pad" aria-label="Walking controls">
+        <button data-walk="left" aria-label="Turn left">↶</button>
+        <button data-walk="forward" aria-label="Walk forward">↑</button>
+        <button data-walk="back" aria-label="Walk backward">↓</button>
+        <button data-walk="right" aria-label="Turn right">↷</button>
+      </div>
+    </div>
+  </div>
+  <audio id="garden-music" loop preload="none" src="lantern-garden.mp3?v=harp"></audio>
+</dialog>
+<dialog id="viewer" aria-labelledby="dialog-title"><div class="dialoghead"><h2 id="dialog-title"></h2><button class="close" aria-label="Close and return">×</button></div>
+<div id="gallery"><figure><img id="photo" alt=""><figcaption id="caption"></figcaption></figure>
+<div class="controls"><button id="previous">← Previous</button><span id="count" aria-live="polite"></span><button id="next">Next →</button></div></div>
+<article id="poems" hidden><section class="verse"><p>Emerald eyes are the color of Spring<br>And a little pink nose beneath<br>The softening folds of snow, ash, and earth mixing<br>In the rivers of soft flowing fur...</p></section><section class="verse"><h3>83 Waking August 7th –</h3><p>Eyes open: intro to the symphony of life<br>Soft cat curled along the feet<br>Warm feelings as we turn<br>The expansive blue; falling sky, our view</p><p>Believe in serenity: blinking eyes dazed<br>Open wide our heart, and closing eyes<br>Falling into the darkness<br>Pillow soft, tucked beneath the sheets</p><p>Content: the landscape of sleep,<br>But waking memories in the celestial blue<br>The sun shines atop the moon<br>Embodying thought: filtering life<br>Before our dreams each morning</p></section><section class="verse"><h3>171 -</h3><p>Cares had drifted<br>From our thoughts<br>If only as lonely<br>They fell into<br>The quiet night</p><p>To let our dreams<br>Float among<br>The easel of darkness<br>Sheltered by blankets<br>Tucked warmly soft</p><p>Around our bodies<br>With murmuring breath<br>Drawing in life<br>From the grace<br>Of our quietness</p><p>Among our eyes<br>We searched still,<br>But we stayed<br>Quietly in each<br>Others’ thoughts</p></section><section class="verse"><h3>201 A May Thursday –</h3><p>Gray clouds stood atop the sky,<br>Whispering with a lonely sigh <br>Of the shaking emerald leaves</p><p>And a night cat set perched<br>Shimmering against the alabaster<br>White all along the stone steps</p><p>In a moment of a cool day,<br>The rain fell, as I held<br>A forest dream; My heart swelled</p><p>With the little frog, slippery <br>And drenched, enclosed beneath <br>My trembling warm hands</p><p>I placed my soul deep into<br>The dreary boundless eyes<br>Forever I was held, wishing goodbye</p></section><p class="closing">February 14, 2006 — July 23, 2026<br><em>Farewell, my friend...</em></p></article>
+</dialog>
+</body></html>
