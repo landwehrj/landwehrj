@@ -365,7 +365,7 @@
     function lantern(x,y,z,size,fixture=false){
       const glow=new T.Sprite(lanternGlow);
       scene.add(reflected(glow));
-      const lamp={x,y,z,size,phase:rand()*fullTurn,glow};
+      const lamp={x,y,z,size,phase:rand()*fullTurn,glow,fixture};
       lanterns.push(lamp);
       if(fixture)fixtures.push(lamp);
     }
@@ -427,8 +427,9 @@
       vertexShader:`attribute vec4 lanternData;uniform float time,viewportHeight;varying float tint,visibility;
         void main(){vec3 p=position;visibility=1.;
         if(lanternData.w>.5){
-          float rise=mod(position.y-1.3+time*(.11+.04*lanternData.z),40.);
-          p.y=1.3+rise;p.x-=(p.y-position.y)*.19;
+          float rise=mod(position.y-1.3+time*(.19+.09*lanternData.z),40.);
+          p.y=1.3+rise;p.x-=(p.y-position.y)*.31;
+          p.z+=.85*sin(time*.12+lanternData.y);
           visibility=smoothstep(0.,1.1,rise)*(1.-smoothstep(37.,40.,rise))*.72;
         }
         p.x+=.18*sin(time*.27+lanternData.y);p.y+=.25*sin(time*.31+lanternData.y);
@@ -650,6 +651,14 @@
       matrices.forEach((m,i)=>objects.setMatrixAt(i,m));objects.frustumCulled=false;scene.add(reflected(objects));
     }
 
+    // Lower lanterns drift beside the walk, close enough to watch their
+    // reflections travel across the water from both banks of the boardwalk.
+    bridges.forEach((bridge,i)=>{
+      const side=i%2===0?1:-1;
+      const x=(bridge.sx+bridge.x)/2,z=(bridge.sz+bridge.z)/2;
+      lantern(x+side*7.4,1.65+(i%3)*.40,z,.81+(i%4)*.075);
+      if(i%3===0)lantern(x-side*6.8,3.4,z-2.4,.87);
+    });
     // Individual nearby lanterns show the bamboo hoops and translucent paper.
     for(let i=0;i<44;i++){
       const angle=fullTurn*(i+rand()*.7)/44,dist=14+rand()*15;
@@ -663,10 +672,19 @@
     const support=new T.Object3D(),localPart=new T.Object3D(),partMatrix=new T.Matrix4();
     function updateLanterns(time){
       nightTime.value=reduced.matches?0:time;
-      lanterns.forEach(({x,y,z,size,phase,glow},i)=>{
-        const t=reduced.matches?0:time;
+      const t=nightTime.value;
+      lanterns.forEach(({x,y,z,size,phase,glow,fixture},i)=>{
         const lift=Math.sin(t*.36+phase), drift=Math.sin(t*.21+phase*1.2);
-        support.position.set(x+.12*drift,y+.17*lift,z+.078*Math.cos(t*.24+phase));
+        if(fixture){
+          support.position.set(x+.12*drift,y+.17*lift,z+.078*Math.cos(t*.24+phase));
+        }else{
+          const flight=t*(.14+.014*(i%5))+phase;
+          support.position.set(
+            x+2.55*Math.sin(flight),
+            y+.73*Math.sin(flight-.65)+.10*lift,
+            z+3.6*Math.cos(flight)
+          );
+        }
         support.rotation.set(.04*lift,phase+.12*drift,.07*drift);
         support.scale.setScalar(size);support.updateMatrix();
         lanternMeshes.forEach((obj,j)=>{
