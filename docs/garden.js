@@ -292,7 +292,14 @@
           float fresnel=.045+.955*pow(grazing,5.0);
           float warm=max(0.,lights.r-lights.b);
           float stroke=.94+.06*sin(ripple)*detail;
-          vec3 deepWater=navy+teal*(.020+.011*waveSlope)*exp(-.024*dist);
+          vec3 rippleNormal=normalize(vec3(.017*cos(swell)-.031*cos(chop)*detail,1.,
+                                          .045*waveSlope));
+          vec3 skyHalfway=normalize(normalize(ray)+normalize(vec3(-.42,.48,.77)));
+          float skySheen=pow(max(0.,dot(rippleNormal,skyHalfway)),20.);
+          float nearby=(1.-smoothstep(8.,28.,dist))*(1.-.80*still);
+          vec3 closeRipples=vec3(.009,.018,.032)*nearby*(.12+.72*skySheen)
+                            *(.46+.54*smoothstep(-.55,.82,waveSlope));
+          vec3 deepWater=navy+teal*(.020+.011*waveSlope)*exp(-.024*dist)+closeRipples;
           vec3 river=mix(deepWater,lights*stroke,fresnel)+vec3(1.,.52,.22)*warm*.11;
         if(still>.001){
           vec4 projected=poolProjection*vec4(world,1.);
@@ -315,11 +322,19 @@
         }`
     }));
     water.rotation.x=-Math.PI/2;water.position.set(0,waterLevel,-75);scene.add(water);
-    const glowMap=painted(96,(ctx,n)=>{
-      const g=ctx.createRadialGradient(n/2,n/2,0,n/2,n/2,n/2);
-      g.addColorStop(0,'#ffe6aee8');g.addColorStop(.14,'#ffaf5588');g.addColorStop(.42,'#ff692330');g.addColorStop(1,'#fa492000');
-      ctx.fillStyle=g;ctx.fillRect(0,0,n,n);
-    });
+    const glowMap=painted(1,(ctx)=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,1,1)});
+    function softGlow(material){
+      material.onBeforeCompile=shader=>{
+        shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`
+          vec2 haloPoint=vUv*2.-1.;
+          float rr=dot(haloPoint,haloPoint);
+          float falloff=exp(-8.5*rr)*(1.-smoothstep(.43,.76,rr));
+          diffuseColor.rgb*=mix(vec3(1.,.35,.12),vec3(1.,.63,.29),exp(-6.*rr));
+          diffuseColor.a*=falloff;
+        `);
+      };
+      return material;
+    }
     const batches=new Map();
     const cube=new T.BoxGeometry(1,1,1);
     const limestone=painted(512,(ctx,n)=>{
@@ -337,11 +352,28 @@
       }
     });
     limestone.wrapS=limestone.wrapT=T.RepeatWrapping;
+    const stonePores=painted(128,(ctx,n)=>{
+      const random=seedRandom();
+      ctx.fillStyle='#aaaaaa';ctx.fillRect(0,0,n,n);
+      for(let i=0;i<2100;i++){
+        const x=random()*n,y=random()*n,r=.15+random()*.65;
+        ctx.fillStyle=i%4?'#50505066':'#e5e5e577';
+        ctx.beginPath();ctx.arc(x,y,r,0,fullTurn);ctx.fill();
+      }
+    });
+    stonePores.encoding=T.LinearEncoding;
+    stonePores.wrapS=stonePores.wrapT=T.RepeatWrapping;
     const stone = new T.MeshStandardMaterial({map:limestone,color:color('#89939e'),roughness:.86});
     const edge = new T.MeshStandardMaterial({map:limestone,color:color('#849fa8'),roughness:.49});
     const bronze = new T.MeshStandardMaterial({color:color('#bc9b71'),roughness:.43,metalness:.28});
     const plinth = new T.MeshStandardMaterial({color:color('#44535a'),roughness:.95});
-    const linen = new T.MeshStandardMaterial({color:color('#bdd1cb'),roughness:1});
+    const linen = new T.MeshStandardMaterial({color:color('#c4b7a5'),roughness:1});
+    const pictureMetal=new T.MeshStandardMaterial({color:color('#62503d'),roughness:.49,metalness:.38});
+    const pictureBulb=new T.MeshBasicMaterial({color:color('#ffd490')});
+    const blockers=[];
+    function blockWalking(x,z,width,depth){
+      blockers.push({x,z,halfWidth:width/2,halfDepth:depth/2});
+    }
     const matrix = new T.Object3D();
     function batch(geometry,material,x,y,z,w,h,d,rotation=0, tilt=0) {
       const key=geometry.id+'-'+material.id;
@@ -354,8 +386,30 @@
     photoUniforms.photograph.value=atlasMap;
     atlasMap.encoding=T.sRGBEncoding;atlasMap.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
     const photoMat=new T.MeshStandardMaterial({
-      toneMapped:false,map:atlasMap,emissiveMap:atlasMap,emissive:color('#e2e5eb'),emissiveIntensity:.62,
-      color:color('#9aa8b4'),roughness:.91
+      map:atlasMap,emissiveMap:atlasMap,emissive:color('#efe2cf'),emissiveIntensity:.12,
+      color:color('#f1e6d6'),roughness:.96
+    });
+    const pictureGlass=new T.ShaderMaterial({
+      transparent:true,depthWrite:false,
+      uniforms:{nearbyLantern:{value:new T.Vector3()}},
+      vertexShader:`varying vec3 glassPosition,glassNormal;
+        void main(){
+          glassPosition=(modelMatrix*vec4(position,1.)).xyz;
+          glassNormal=mat3(modelMatrix)*normal;
+          gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);
+        }`,
+      fragmentShader:`uniform vec3 nearbyLantern;
+        varying vec3 glassPosition,glassNormal;
+        void main(){
+          vec3 view=normalize(cameraPosition-glassPosition);
+          vec3 normal=normalize(glassNormal);
+          vec3 reflectedRay=reflect(-view,normal);
+          float fresnel=.009+.13*pow(1.-max(dot(view,normal),0.),5.);
+          float glint=pow(max(dot(reflectedRay,normalize(nearbyLantern-glassPosition)),0.),54.);
+          vec3 sky=mix(vec3(.035,.064,.107),vec3(.12,.20,.30),smoothstep(-.22,.40,reflectedRay.y));
+          gl_FragColor=vec4(mix(sky,vec3(.88,.38,.11),glint),fresnel+.048*glint);
+          #include <encodings_fragment>
+        }`
     });
     const portraits=[];
     // The shade is a closed paper envelope at the top and open at its bamboo hoop.
@@ -368,23 +422,25 @@
       ctx.fillStyle=gradient;ctx.fillRect(0,0,n,n);
       for(let i=0;i<8;i++){
         const x=i*n/8;
-        ctx.fillStyle='rgba(132,70,40,.18)';ctx.fillRect(x,0,1.7,n);
-        ctx.fillStyle='rgba(255,247,200,.3)';ctx.fillRect(x+2,0,1,n);
+        ctx.fillStyle='rgba(111,51,27,.32)';ctx.fillRect(x,0,1.35,n);
+        ctx.fillStyle='rgba(255,247,200,.14)';ctx.fillRect(x+1.35,0,.85,n);
       }
       for(let j=0;j<2200;j++){
-        ctx.fillStyle=j%2?'#97583c12':'#ffffdf20';const x=rand()*n,y=rand()*n;
-        ctx.fillRect(x,y,2+rand()*12,.65);
+        const x=rand()*n,y=rand()*n,length=1+rand()*8;
+        ctx.strokeStyle=j%3?'#7e462825':'#fff7ce33';ctx.lineWidth=.48;
+        ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+length*.46,y-1.1,x+length,y+.65);ctx.stroke();
       }
       for(const y of [.13,.84,.96]){ctx.fillStyle='#8e522b35';ctx.fillRect(0,y*n,n,1.8)}
     });
-    const shadeGeometry=new T.LatheGeometry([
+    const shadeProfile=new T.SplineCurve([
       [.155,0],[.168,.032],[.233,.117],[.276,.27],[.274,.45],
       [.255,.56],[.218,.635],[.148,.673],[.001,.679]
-    ].map(([r,y])=>new T.Vector2(r,y)),16);
+    ].map(([r,y])=>new T.Vector2(r,y)));
+    const shadeGeometry=new T.LatheGeometry(shadeProfile.getPoints(24),30);
     const hoopGeometry=new T.TorusGeometry(.158,.009,8,22);
     hoopGeometry.rotateX(Math.PI/2);
     const braceGeometry=new T.BoxGeometry(.308,.009,.012);
-    const emberGeometry=new T.SphereGeometry(.053,10,8);
+    const flameGeometry=new T.PlaneGeometry(.142,.224);
     function candlePaper(material){
       material.onBeforeCompile=shader=>{
         shader.vertexShader='varying vec3 paperNormal,paperView;\n'+shader.vertexShader.replace(
@@ -403,26 +459,50 @@
            float face=abs(dot(normalize(paperNormal),normalize(paperView)));
            float transmission=smoothstep(.08,.91,face);
            float flame=exp(-pow((vUv.y-.20)*6.0,2.));
-           float ribs=.96+.04*cos(vUv.x*50.26548);
-           diffuseColor.rgb*=mix(vec3(.66,.48,.31),vec3(1.31,1.12,.88),transmission)*ribs;
-           diffuseColor.rgb+=vec3(.99,.71,.33)*flame*transmission;
+           float ribs=1.-.18*pow(.5+.5*cos(vUv.x*50.26548),16.);
+           float paperDensity=smoothstep(.12,.88,diffuseColor.g);
+           diffuseColor.rgb*=mix(vec3(.66,.48,.31),vec3(1.31,1.12,.88),transmission);
+           diffuseColor.rgb+=vec3(.99,.71,.33)*flame*transmission*mix(.66,1.,paperDensity);
+           diffuseColor.rgb*=ribs;
            diffuseColor.a=.04;`
         );
       };
       return material;
     }
     const paper=candlePaper(new T.MeshBasicMaterial({map:paperMap,side:T.DoubleSide,toneMapped:false}));
-    const bamboo=new T.MeshBasicMaterial({color:color('#8c5c3a')});
-    const ember=new T.MeshBasicMaterial({color:color('#ffe8aa')});
-    const lanternGlow=new T.SpriteMaterial({map:glowMap,transparent:true,opacity:.48,depthWrite:false,blending:T.AdditiveBlending});
+    const bamboo=new T.MeshBasicMaterial({color:color('#34241a')});
+    const flameMaterial=new T.ShaderMaterial({
+      transparent:true,depthWrite:false,blending:T.AdditiveBlending,toneMapped:false,
+      vertexShader:`varying vec2 flameUV;
+        void main(){
+          flameUV=uv;
+          vec4 flameCenter=modelViewMatrix*instanceMatrix*vec4(0.,0.,0.,1.);
+          flameCenter.xy+=position.xy*length(instanceMatrix[0].xyz);
+          gl_Position=projectionMatrix*flameCenter;
+        }`,
+      fragmentShader:`varying vec2 flameUV;
+        void main(){
+          float height=flameUV.y;
+          float width=mix(.33,.10,smoothstep(.27,.94,height));
+          float bend=.14*height*height;
+          float flameX=(flameUV.x-.48-bend)/width;
+          float aura=exp(-2.4*flameX*flameX)*smoothstep(.02,.23,height)*(1.-smoothstep(.64,.98,height));
+          vec3 heat=mix(vec3(1.25,.36,.035),vec3(1.36,1.01,.46),exp(-4.*flameX*flameX-5.*height));
+          gl_FragColor=vec4(heat,aura*.86);
+          #include <encodings_fragment>
+        }`
+    });
+    const lanternGlow=softGlow(new T.SpriteMaterial({
+      map:glowMap,transparent:true,opacity:.36,depthWrite:false,toneMapped:false,blending:T.AdditiveBlending
+    }));
     const pieces=[
       [shadeGeometry,paper],[hoopGeometry,bamboo],[braceGeometry,bamboo],
-      [braceGeometry,bamboo],[emberGeometry,ember]
+      [braceGeometry,bamboo],[flameGeometry,flameMaterial]
     ];
-    function lantern(x,y,z,size,fixture=false,canopy=0){
+    function lantern(x,y,z,size,fixture=false,canopy=0,mountHeight=0){
       const glow=new T.Sprite(lanternGlow);
       scene.add(reflected(glow));
-      const lamp={x,y,z,size,phase:rand()*fullTurn,glow,fixture,canopy};
+      const lamp={x,y,z,size,phase:rand()*fullTurn,glow,fixture,canopy,mountHeight};
       lanterns.push(lamp);
       if(fixture)fixtures.push(lamp);
     }
@@ -454,7 +534,10 @@
       const roomBounds=rooms.map(({x,z,width,depth})=>new T.Vector4(x,z,width/2,depth/2));
       for(const material of materials){
         const isStone=material.map===limestone;
-        material.customProgramCacheKey=()=>isStone?'river-stone':'river-lanterns';
+        const isCap=material===edge;
+        const isPrint=material===photoMat,isMat=material===linen,isDeck=material===timber;
+        const profile=isStone?'stone':isPrint?'print':isMat?'mat':isDeck?'deck':'lanterns';
+        material.customProgramCacheKey=()=>'river-'+profile;
         material.onBeforeCompile=shader=>{
           addRiverMist(shader);
           shader.uniforms.riverFixtures={value:lightmap};
@@ -506,14 +589,23 @@
               vec2 local=abs(riverSurface.xz-bounds.xy);
               vec2 wallGap=bounds.zw-local;
               if(min(wallGap.x,wallGap.y)<-.13)continue;
-              float wall=1.-smoothstep(.018,.163,max(0.,wallGap.x-.28));
-              float endWall=(1.-smoothstep(.014,.154,max(0.,wallGap.y-.126)))
-                            *smoothstep(1.60,1.79,local.x);
+              vec2 jointGap=max(vec2(0.),wallGap-vec2(.28,.15));
+              float besideDoor=smoothstep(1.60,1.79,local.x);
+              float wall=1.-smoothstep(.018,.163,jointGap.x);
+              float endWall=(1.-smoothstep(.014,.154,jointGap.y))*besideDoor;
               float atDeck=1.-smoothstep(.017,.178,abs(riverSurface.y));
               float atEave=1.-smoothstep(.06,.60,abs(riverSurface.y-riverEaveHeights[gallery]));
               float sideAtEave=1.-smoothstep(.12,.61,wallGap.x);
               float crease=1.-(1.-wall*.84)*(1.-endWall*.81);
               irradiance*=(1.-crease*.86*atDeck)*(1.-.26*sideAtEave*atEave);
+
+              // The boards in contact with the wall receive less lantern
+              // light too. Keep this shadow much tighter than the ambient one.
+              float floorJoint=max(1.-smoothstep(.008,.096,jointGap.x),
+                                   (1.-smoothstep(.008,.096,jointGap.y))*besideDoor);
+              floorJoint*=1.-smoothstep(.006,.057,abs(riverSurface.y));
+              reflectedLight.directDiffuse*=1.-.30*floorJoint;
+              reflectedLight.directSpecular*=1.-.46*floorJoint;
               break;
             }`
           ).replace('#include <color_fragment>',`
@@ -526,10 +618,44 @@
             #include <roughnessmap_fragment>
             roughnessFactor=mix(roughnessFactor,.31,wetness*.74);
           `);
+          if(isPrint || isMat){
+            // Light from the bar above each frame falls across the print and mat.
+            const pictureVarying='varying vec3 pictureFace;\n';
+            shader.vertexShader=pictureVarying+(isPrint?'attribute vec2 pictureUV;\n':'')
+              +shader.vertexShader.replace('#include <begin_vertex>',`
+              #include <begin_vertex>
+              pictureFace=vec3(${isPrint?'pictureUV,1.':'position.xy+.5,max(normal.z,0.)'});
+            `);
+            shader.fragmentShader=pictureVarying+shader.fragmentShader.replace('#include <lights_fragment_maps>',`
+              #include <lights_fragment_maps>
+              float down=clamp(1.-pictureFace.y,0.,1.);
+              float spread=mix(.35,.71,sqrt(down));
+              float beam=1.-smoothstep(spread*.36,spread,abs(pictureFace.x-.5));
+              float wash=beam/(1.+1.1*down);
+              vec3 pictureLight=vec3(1.,.78,.59)*pictureFace.z*(.86+1.75*wash);
+              reflectedLight.directDiffuse+=BRDF_Diffuse_Lambert(material.diffuseColor)*pictureLight;
+            `);
+          }
+          if(isDeck){
+            shader.fragmentShader=shader.fragmentShader.replace('#include <roughnessmap_fragment>',`
+              #include <roughnessmap_fragment>
+              // Canvas row zero is at the top. Match the staggered joints in the wood maps.
+              float plankRow=floor((1.-vUv.y)*${plankRows.toFixed(1)});
+              float rowInTile=mod(plankRow,${plankRows.toFixed(1)});
+              float joint=.13+.74*mod(rowInTile*7.,${plankRows.toFixed(1)})/${(plankRows-1).toFixed(1)};
+              float board=floor(vUv.x-joint);
+              float finish=fract(sin(dot(vec2(board,plankRow),vec2(127.1,311.7)))*43758.5453)-.5;
+              float detail=1.-smoothstep(.28,1.,max(fwidth(vUv.x),fwidth(vUv.y)*${plankRows.toFixed(1)}));
+              roughnessFactor=clamp(roughnessFactor+.19*finish*detail,.29,1.);
+            `);
+          }
           if(isStone){
+            shader.uniforms.riverStonePores={value:stonePores};
+            shader.uniforms.riverEdgeWear={value:isCap ? .24 : .11};
             // Project against the world axes so stretching the base geometry
             // never stretches the finish. Blend the projections on the bevels.
-            shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',`
+            shader.fragmentShader='uniform sampler2D riverStonePores;\nuniform float riverEdgeWear;\n'
+              +shader.fragmentShader.replace('#include <map_fragment>',`
               vec3 stoneAxis=abs(inverseTransformDirection(normalize(vNormal),viewMatrix));
               vec3 stoneWeight=pow(stoneAxis,vec3(7.0));
               stoneWeight/=dot(stoneWeight,vec3(1.0));
@@ -537,17 +663,23 @@
               vec4 grain=texture2D(map,grainUV.zy)*stoneWeight.x
                         +texture2D(map,grainUV.xz)*stoneWeight.y
                         +texture2D(map,grainUV.xy)*stoneWeight.z;
-              diffuseColor*=mapTexelToLinear(grain);
+              vec3 poresUV=riverSurface*2.75;
+              float pores=texture2D(riverStonePores,poresUV.zy).g*stoneWeight.x
+                         +texture2D(riverStonePores,poresUV.xz).g*stoneWeight.y
+                         +texture2D(riverStonePores,poresUV.xy).g*stoneWeight.z;
+              float worn=smoothstep(.12,.69,stoneAxis.y)*(1.-smoothstep(.94,.999,stoneAxis.y));
+              diffuseColor.rgb*=mapTexelToLinear(grain).rgb*(1.+worn*riverEdgeWear);
             `).replace('#include <roughnessmap_fragment>',`
               #include <roughnessmap_fragment>
-              roughnessFactor=clamp(roughnessFactor+(.73-grain.g)*.55,.42,1.);
+              roughnessFactor=clamp(roughnessFactor+(.73-grain.g)*.30+(.67-pores)*.12-worn*.16,.34,1.);
             `).replace('#include <normal_fragment_maps>',`
               #include <normal_fragment_maps>
               // A small amount of relief follows the same unstretched projection.
               vec3 stoneDx=dFdx(-vViewPosition),stoneDy=dFdy(-vViewPosition);
               vec3 stoneTx=cross(stoneDy,normal),stoneTy=cross(normal,stoneDx);
               float stoneDet=dot(stoneDx,stoneTx);
-              vec3 microRelief=sign(stoneDet)*(stoneTx*dFdx(grain.g)+stoneTy*dFdy(grain.g))*.004;
+              float stoneHeight=.0028*grain.g+.00062*pores;
+              vec3 microRelief=sign(stoneDet)*(stoneTx*dFdx(stoneHeight)+stoneTy*dFdy(stoneHeight));
               normal=normalize(max(abs(stoneDet),1e-7)*normal-microRelief);
             `);
           }
@@ -625,7 +757,8 @@
         tint=lanternData.z;}`,
       fragmentShader:`varying float tint,visibility;void main(){
         vec2 p=gl_PointCoord*2.-1.;float d=length(p*vec2(1.33,1.));
-        float core=1.-smoothstep(.30,.53,d);float halo=exp(-5.2*d*d);
+        float core=1.-smoothstep(.30,.53,d);
+        float halo=exp(-8.0*d*d)*(1.-smoothstep(.55,.91,d));
         float base=smoothstep(-.15,.43,p.y);vec3 paper=mix(vec3(.92,.16,.023),vec3(1.,.87,.37),base);
         vec3 c=mix(vec3(.96,.25,.045),paper,core);
         gl_FragColor=vec4(c*(.72+.28*tint),(core*.96+(1.-core)*halo*.43)*visibility);
@@ -634,12 +767,6 @@
     });
     scene.add(reflected(new T.Points(cloudGeo,cloudMaterial)));
 
-    const poolMap=painted(96,(ctx,n)=>{
-      const g=ctx.createRadialGradient(n/2,n/2,0,n/2,n/2,n/2);
-      g.addColorStop(0,'rgba(255,173,81,.41)');g.addColorStop(.40,'rgba(249,120,42,.20)');g.addColorStop(1,'rgba(241,106,29,0)');
-      ctx.fillStyle=g;ctx.fillRect(0,0,n,n);
-    });
-    const poolMat=new T.MeshBasicMaterial({map:poolMap,transparent:true,depthWrite:false,opacity:.5});
     const poolGeo=new T.PlaneGeometry(1,1);poolGeo.rotateX(-Math.PI/2);
     const contactMap=painted(64,(ctx,n)=>{
       const g=ctx.createRadialGradient(n/2,n/2,0,n/2,n/2,n/2);
@@ -649,6 +776,15 @@
     });
     const contact=new T.MeshBasicMaterial({map:contactMap,transparent:true,depthWrite:false});
     const waterContact=new T.MeshBasicMaterial({map:contactMap,transparent:true,depthWrite:false,opacity:.85});
+    const postContactMap=painted(64,(ctx,n)=>{
+      const image=ctx.createImageData(n,n);
+      for(let y=0;y<n;y++)for(let x=0;x<n;x++){
+        const edge=Math.max(Math.abs(x+.5-n/2),Math.abs(y+.5-n/2))/(n/2);
+        image.data[(y*n+x)*4+3]=Math.round(171*(1-T.MathUtils.smoothstep(edge,.64,.99)));
+      }
+      ctx.putImageData(image,0,0);
+    });
+    const postContact=new T.MeshBasicMaterial({map:postContactMap,transparent:true,depthWrite:false});
     const cedarMap=painted(512,(ctx,n)=>{
       const grain=ctx.createLinearGradient(0,0,n,0);
       grain.addColorStop(0,'#826351');grain.addColorStop(.22,'#ab8e71');
@@ -680,50 +816,72 @@
         ctx.restore();
       }
     });
+    const plankRows=18,plankWidth=.20,plankLength=1.9;
+    const plankRepeatLength=plankRows*plankWidth;
+    // A tile repeats one full board length. Shift the joint across each row
+    // so every board has the same length and neighboring ends are staggered.
+    const plankJoints=Array.from({length:plankRows},(_,i)=>
+      .13+.74*((i*7)%plankRows)/(plankRows-1));
     const timberMap=painted(1024,(ctx,n)=>{
-      const boards=18, pitch=n/boards;
-      for(let i=0;i<boards;i++){
-        const z=i*pitch,split=n*(.18+rand()*.65);
+      const pitch=n/plankRows;
+      for(let i=0;i<plankRows;i++){
+        const z=i*pitch,joint=n*plankJoints[i];
         ctx.fillStyle=['#8c8377','#9a8f7d','#8a857b','#a19985','#807f75'][i%5];
         ctx.fillRect(0,z,n,pitch);
-        ctx.fillStyle=i%2?'#d2ba9618':'#32251c13';
-        ctx.fillRect(split,z,n-split,pitch);
-        ctx.fillStyle='#312d2b';ctx.fillRect(0,z,n,2.4);ctx.fillRect(split,z,1.5,pitch);
-        ctx.fillStyle='#d4c3a957';ctx.fillRect(0,z+2.4,n,.8);
+        ctx.fillStyle='#4d443a';ctx.fillRect(0,z,n,1.35);
+        ctx.fillStyle='#d4c3a933';ctx.fillRect(0,z+1.35,n,.65);
         for(let j=0;j<115;j++){
           const x=rand()*n,y=z+3+rand()*(pitch-4),length=4+rand()*160;
           ctx.strokeStyle=j%3?'#493d321f':'#e9d8b523';ctx.lineWidth=.36+rand()*.68;
-          ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+length/2,y+rand()*2-1,x+length,y+.4);ctx.stroke();
+          const bend=rand()*2-1;
+          ctx.beginPath();
+          for(const start of x+length>=n?[x,x-n]:[x]){
+            ctx.moveTo(start,y);
+            ctx.quadraticCurveTo(start+length/2,y+bend,start+length,y+.4);
+          }
+          ctx.stroke();
         }
+        ctx.fillStyle='#4d443a';ctx.fillRect(joint-.76,z+1.35,1.52,pitch-1.35);
+        ctx.fillStyle='#d4c3a943';ctx.fillRect(joint+.76,z+1.75,.75,pitch-2.15);
         ctx.fillStyle='#453c3590';
-        for(const x of [8,split-5,split+6,n-9]){
+        for(const x of [joint-7,joint+7]){
           ctx.beginPath();ctx.ellipse(x,z+pitch*.24,1.5,1.9,0,0,fullTurn);ctx.fill();
           ctx.beginPath();ctx.ellipse(x,z+pitch*.77,1.5,1.9,0,0,fullTurn);ctx.fill();
         }
       }
     });
     const plankHeight=painted(512,(ctx,n)=>{
-      const pitch=n/18;
-      for(let i=0;i<18;i++){
-        const z=i*pitch;
+      const pitch=n/plankRows;
+      for(let i=0;i<plankRows;i++){
+        const z=i*pitch,joint=n*plankJoints[i];
         const profile=ctx.createLinearGradient(0,z,0,z+pitch);
-        profile.addColorStop(0,'#535353');profile.addColorStop(.058,'#969696');
-        profile.addColorStop(.40,'#b2b2b2');profile.addColorStop(.93,'#999999');
-        profile.addColorStop(1,'#535353');
+        profile.addColorStop(0,'#7f7f7f');profile.addColorStop(.075,'#a5a5a5');
+        profile.addColorStop(.925,'#a5a5a5');profile.addColorStop(1,'#7f7f7f');
         ctx.fillStyle=profile;ctx.fillRect(0,z,n,pitch+.2);
+        ctx.fillStyle='#898989';ctx.fillRect(joint-.55,z+1,1.1,pitch-2);
       }
     });
     const deckFinish=painted(512,(ctx,n)=>{
       const grainRandom=seedRandom();
-      for(let i=0;i<18;i++){
-        const pitch=n/18,z=i*pitch;
+      for(let i=0;i<plankRows;i++){
+        const pitch=n/plankRows,z=i*pitch;
         ctx.fillStyle=['#b2b2b2','#d5d5d5','#bababa','#dedede','#afafaf'][i%5];
         ctx.fillRect(0,z,n,pitch+.2);
-        for(let j=0;j<38;j++){
-          const y=z+1+grainRandom()*(pitch-2);
-          ctx.fillStyle=j%4?'#74747452':'#efefef49';
-          ctx.fillRect(grainRandom()*n,y,12+grainRandom()*n*.34,.35+grainRandom()*.62);
+        ctx.save();
+        ctx.beginPath();ctx.rect(0,z+1,n,pitch-2);ctx.clip();
+        for(let j=0;j<54;j++){
+          const x=grainRandom()*n,y=z+2+grainRandom()*(pitch-4);
+          const length=20+grainRandom()*n*.47,bend=grainRandom()*2.2-1.1;
+          ctx.strokeStyle=j%4?'#56565672':'#efefef59';
+          ctx.lineWidth=.45+grainRandom()*.80;
+          ctx.beginPath();
+          for(const start of x+length>=n?[x,x-n]:[x]){
+            ctx.moveTo(start,y);
+            ctx.bezierCurveTo(start+length*.31,y+bend,start+length*.75,y-bend*.39,start+length,y+bend*.36);
+          }
+          ctx.stroke();
         }
+        ctx.restore();
       }
       const wear=ctx.createLinearGradient(0,0,n,0);
       wear.addColorStop(0,'#70707058');wear.addColorStop(.13,'#70707000');
@@ -732,21 +890,43 @@
       ctx.fillStyle=wear;ctx.fillRect(0,0,n,n);
     });
     const cedarFinish=painted(256,(ctx,n)=>{
+      const random=seedRandom();
       const stripe=ctx.createLinearGradient(0,0,n,0);
       stripe.addColorStop(0,'#acacac');stripe.addColorStop(.28,'#d7d7d7');
       stripe.addColorStop(.43,'#b4b4b4');stripe.addColorStop(.77,'#e3e3e3');
       stripe.addColorStop(1,'#acacac');
       ctx.fillStyle=stripe;ctx.fillRect(0,0,n,n);
+      for(let i=0;i<270;i++){
+        const x=random()*n,y=random()*n,length=15+random()*n*.39;
+        ctx.strokeStyle=i%4?'#67676772':'#eaeaea4f';ctx.lineWidth=.34+random()*.57;
+        ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x-.7,y+length*.54,x+.7,y+length);ctx.stroke();
+      }
     });
     for(const texture of [plankHeight,deckFinish,cedarFinish]){
       texture.encoding=T.LinearEncoding;
       texture.wrapS=texture.wrapT=T.RepeatWrapping;
     }
+    for(const texture of [timberMap,plankHeight,deckFinish]){
+      texture.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+    }
     const timber=new T.MeshStandardMaterial({
-      map:timberMap,bumpMap:plankHeight,bumpScale:.019,roughnessMap:deckFinish,roughness:.79,
+      map:timberMap,bumpMap:plankHeight,bumpScale:.008,roughnessMap:deckFinish,roughness:.79,
       color:color('#b9b7b0')
     });
     timberMap.wrapS=timberMap.wrapT=T.RepeatWrapping;
+    const deckGeometries=new Map();
+    function deck(x,z,width,depth,thickness){
+      const dimensions=width+'x'+depth;
+      if(!deckGeometries.has(dimensions)){
+        const geometry=cube.clone();
+        const uv=geometry.getAttribute('uv'),normal=geometry.getAttribute('normal');
+        for(let i=0;i<uv.count;i++){
+          if(normal.getY(i)!==0)uv.setXY(i,uv.getX(i)*width/plankLength,uv.getY(i)*depth/plankRepeatLength);
+        }
+        deckGeometries.set(dimensions,geometry);
+      }
+      batch(deckGeometries.get(dimensions),timber,x,-thickness/2,z,width,thickness,depth);
+    }
     const tiles=painted(256,(ctx,n)=>{
       for(let i=0;i<7;i++)for(let j=-1;j<6;j++){
         const x=(j+.5*(i%2))*n/5,y=i*n/7;
@@ -764,6 +944,9 @@
     const cedar=new T.MeshStandardMaterial({
       map:cedarMap,bumpMap:cedarMap,bumpScale:.011,roughnessMap:cedarFinish,roughness:.83,color:color('#b58d72')
     });
+    const uprightCedar=cedar.clone();
+    uprightCedar.bumpScale=.014;
+    uprightCedar.roughness=.73;
     const railCap=new T.MeshStandardMaterial({color:color('#c18b54'),roughness:.41,metalness:.2});
     function chamferedBlock(radius){
       const half=.5-radius;
@@ -778,8 +961,9 @@
       for(let v=0;v<uvs.count;v++)uvs.setXY(v,uvs.getX(v)+.5,uvs.getY(v)+.5);
       return geometry;
     }
-    const beam=chamferedBlock(.063), trim=chamferedBlock(.035);
+    const beam=chamferedBlock(.063), trim=chamferedBlock(.035), capBlock=chamferedBlock(.105);
     const plaster=new T.MeshStandardMaterial({map:limestone,color:color('#76858e'),roughness:.78});
+    const mortar=new T.MeshStandardMaterial({color:color('#465162'),roughness:.91});
     const darkTimber=new T.MeshStandardMaterial({
       map:cedarMap,bumpMap:cedarMap,bumpScale:.015,roughnessMap:cedarFinish,roughness:.92,color:color('#644b45')
     });
@@ -788,6 +972,37 @@
       batch(trim,stone,x,waterLevel-.08,z,.56,.285,.58);
       batch(trim,edge,x,waterLevel+.055,z,.54,.048,.56);
       batch(poolGeo,waterContact,x,waterLevel+.003,z,1.54,1,1.63);
+    }
+    function galleryPost(x,z,width,depth,footWidth,footDepth,height){
+      const footHeight=.49,woodBase=footHeight-.018;
+      batch(beam,stone,x,footHeight/2,z,footWidth,footHeight,footDepth);
+      blockWalking(x,z,Math.max(footWidth+.016,.394),Math.max(footDepth+.016,.394));
+      batch(capBlock,edge,x,footHeight-.012,z,footWidth+.016,.030,footDepth+.016);
+      batch(beam,uprightCedar,x,(height+woodBase)/2,z,width,height-woodBase,depth);
+      // The rails meet this separate stone collar, including at right angles.
+      batch(capBlock,edge,x,.784,z,.394,.084,.394);
+      batch(poolGeo,contact,x,.008,z,footWidth+.26,1,footDepth+.26);
+      batch(poolGeo,postContact,x,footHeight+.004,z,width+.10,1,depth+.10);
+      batch(poolGeo,postContact,x,.829,z,width+.10,1,depth+.10);
+    }
+    function stoneWall(alongX,fixed,from,to,capFrom,capTo){
+      const length=to-from;
+      const spans=Math.max(1,Math.round(length/1.12)),step=length/spans;
+      function slab(geometry,material,start,finish,y,height,thickness){
+        const mid=(start+finish)/2,span=finish-start;
+        batch(geometry,material,alongX?mid:fixed,y,alongX?fixed:mid,
+          alongX?span:thickness,height,alongX?thickness:span);
+      }
+      slab(cube,mortar,from,to,.386,.758,.256);
+      const mid=(capFrom+capTo)/2,span=capTo-capFrom;
+      blockWalking(alongX?mid:fixed,alongX?fixed:mid,alongX?span:.394,alongX?.394:span);
+      for(let i=0;i<spans;i++){
+        const low=from+i*step,high=low+step;
+        const start=low+(i===0?0:.006),finish=high-(i===spans-1?0:.006);
+        slab(trim,stone,start,finish,.263,.528,.30);
+        slab(trim,plaster,start,finish,.640,.233,.31);
+        slab(capBlock,edge,i===0?capFrom:start,i===spans-1?capTo:finish,.784,.084,.394);
+      }
     }
     const profiles=[
       [[-1,-.13],[0,1.15],[1,-.13]],
@@ -835,6 +1050,7 @@
     const stations=[];
     function photoGeometry(id,w,h){
       const [ax,ay,aw,ah]=atlas.regions[id],geo=new T.PlaneGeometry(w,h),uv=geo.attributes.uv;
+      geo.setAttribute('pictureUV',uv.clone());
       for(let j=0;j<uv.count;j++)
         uv.setXY(j,(ax+.5+uv.getX(j)*(aw-1))/2048,1-(ay+.5+(1-uv.getY(j))*(ah-1))/2048);
       return geo;
@@ -853,45 +1069,43 @@
       const {x,z,width:w,depth:d}=room,h=galleryHeights[r];
       const roof=r===1 || r===3?cedar:blueTiles;
       galleryRoof(room,h,profiles[r],roof,[.42,.64,.63,.32,.53][r]);
-      batch(cube,timber,x,-.109,z,w,.218,d);
+      deck(x,z,w,d,.218);
       for(const side of [-1,1]){
         const wallX=x+side*(w/2-.13);
         const rimX=x+side*(w/2-.056);
         batch(trim,darkTimber,rimX,-.115,z,.17,.22,d+.09);
         for(const dz of [-d/2+.58,0,d/2-.58])deckPile(rimX,z+dz);
-        batch(beam,stone,wallX,.24,z,.30,.49,d);
-        batch(trim,plaster,wallX,.59,z,.31,.25,d);
-        batch(trim,edge,wallX,.755,z,.40,.086,d+.06);
         batch(poolGeo,contact,wallX-side*.17,.007,z,.44,1,d-.095);
         batch(beam,darkTimber,wallX,h,z,.28,.27,d+.32);
         const uprights=r===2?[-d/2,-d/4,d/4,d/2]:[-d/2,0,d/2];
+        for(let i=1;i<uprights.length;i++){
+          const from=z+uprights[i-1],to=z+uprights[i];
+          stoneWall(false,wallX,from+.194,to-.194,from+.203,to-.203);
+        }
         for(const dz of uprights){
-          batch(beam,cedar,wallX,h*.5,z+dz,.29,h,.28);
-          batch(beam,stone,wallX,.27,z+dz,.41,.45,.40);
+          galleryPost(wallX,z+dz,.29,.28,.41,.40,h);
           batch(trim,bronze,wallX,.84,z+dz,.34,.062,.34);
-          batch(trim,darkTimber,wallX,h-.19,z+dz,.41,.17,.40);
-          batch(poolGeo,contact,wallX-side*.17,.009,z+dz,.62,1,.68);
+          batch(beam,darkTimber,wallX,h-.19,z+dz,.41,.17,.40);
         }
         for(const dz of [-d/2,d/2]){
           const wing=w/2-1.65;
           const wingX=x+side*(1.65+wing/2);
           const post=x+side*1.65;
-          batch(beam,stone,wingX,.29,z+dz,wing,.57,.25);
-          batch(trim,plaster,wingX,.665,z+dz,wing,.21,.28);
-          batch(trim,edge,wingX,.808,z+dz,wing+.07,.072,.37);
-          batch(beam,cedar,post,h*.5,z+dz,.25,h,.27);
-          batch(trim,stone,post,.245,z+dz,.33,.40,.33);
+          const footEnds=[post+side*.16,wallX-side*.20].sort((a,b)=>a-b);
+          const capEnds=[post+side*.203,wallX-side*.203].sort((a,b)=>a-b);
+          stoneWall(true,z+dz,...footEnds,...capEnds);
+          galleryPost(post,z+dz,.25,.27,.33,.33,h);
           batch(trim,bronze,post,h-.30,z+dz,.30,.078,.31);
           batch(poolGeo,contact,wingX,.008,z+dz-Math.sign(dz)*.141,wing,1,.42);
-          batch(poolGeo,contact,post,.01,z+dz-Math.sign(dz)*.17,.64,1,.62);
-          batch(trim,darkTimber,post+side*.27,h-.38,z+dz,.90,.115,.20,0,side*.79);
+          // Seat the brace into the post and underside of the header.
+          batch(beam,cedar,post+side*.285,h-.332,z+dz,.76,.122,.205,0,side*.71);
         }
       }
       for(const dz of [-d/2,d/2]){
         batch(beam,cedar,x,h,z+dz,w,.20,.27);
         batch(trim,darkTimber,x,h+.14,z+dz,w,.071,.29);
-        lantern(x-1.22,h-.85,z+dz,.67,true,h+.48);
-        lantern(x+1.22,h-.85,z+dz,.67,true,h+.48);
+        lantern(x-1.22,h-.85,z+dz,.67,true,h+.48,h-.099);
+        lantern(x+1.22,h-.85,z+dz,.67,true,h+.48,h-.099);
       }
       if(r===4){
         const windowRing=new T.TorusGeometry(.81,.065,8,44);
@@ -920,13 +1134,37 @@
         batch(trim,cedar,px+.078*side,mid,pz,pw+.31,ph+.31,.15,angle);
         batch(trim,bronze,px+.039*side,mid,pz,pw+.19,ph+.19,.097,angle);
         batch(trim,linen,px,mid,pz,pw+.14,ph+.14,.06,angle);
-        for(const dz of [-pw*.36,pw*.36])batch(cube,bronze,px+.13*side,mid*.5,pz+dz,.065,mid,.065);
+        blockWalking(px+.085*side,pz,.27,pw+.42);
+        const wallX=x+side*(w/2-.13),base=.826,frameBottom=mid-(ph+.42)/2;
+        const hangerTop=frameBottom+.27;
+        batch(trim,pictureMetal,px+.216*side,mid,pz,.105,ph*.72,pw*.79);
+        for(const dz of [-pw*.32,pw*.32]){
+          batch(trim,pictureMetal,wallX,base+.018,pz+dz,.20,.039,.15);
+          batch(trim,pictureMetal,wallX,(base+hangerTop)/2,pz+dz,.079,hangerTop-base,.088);
+          batch(trim,pictureMetal,wallX-.075*side,hangerTop,pz+dz,.23,.070,.108);
+        }
+        const pictureX=px-.198*side,pictureY=mid+ph/2+.18;
+        const lightWidth=Math.min(.77,pw*.51);
+        batch(trim,pictureMetal,pictureX,pictureY,pz,.103,.069,lightWidth);
+        batch(trim,pictureBulb,pictureX,pictureY-.034,pz,.045,.012,lightWidth-.065);
+        for(const dz of [-lightWidth*.31,lightWidth*.31]){
+          batch(trim,pictureMetal,px+.079*side,pictureY-.046,pz+dz,.078,.129,.072);
+          batch(trim,pictureMetal,px-.057*side,pictureY,pz+dz,.287,.029,.035);
+        }
         const pic=new T.Mesh(photoGeometry(id,pw,ph),photoMat);
         pic.position.set(px-.043*side,mid,pz);pic.rotation.y=angle;pic.userData.index=stations.length;
         scene.add(pic);portraits.push(pic);stations.push({x:px-side*3.55,z:pz,angle,room});
-        lantern(px-side*.54,2.45,pz+pw/2+.38,.54,true,h+.37);
-        batch(poolGeo,poolMat,px-side*.5,.013,pz,1.6,1,1.6);
-        batch(poolGeo,contact,px-side*.20,.011,pz,1.0,1,pw+.53);
+        const lampX=px-side*.54,lampZ=pz+pw/2+.38;
+        const glass=new T.Mesh(new T.PlaneGeometry(pw+.095,ph+.095),pictureGlass);
+        glass.position.set(px-.050*side,mid,pz);
+        glass.rotation.y=angle;
+        glass.onBeforeRender=()=>{
+          pictureGlass.uniforms.nearbyLantern.value.set(lampX,2.62,lampZ);
+          pictureGlass.uniformsNeedUpdate=true;
+        };
+        scene.add(glass);
+        batch(beam,darkTimber,(wallX+lampX)*.5,h-.045,lampZ,.94,.098,.106);
+        lantern(lampX,2.45,lampZ,.54,true,h+.37,h-.094);
       });
     });
     const landingDepth=4.7;
@@ -947,16 +1185,21 @@
       return [T.MathUtils.lerp(start.x+start.nx*across,finish.x+finish.nx*across,along),
               T.MathUtils.lerp(start.z+start.nz*across,finish.z+finish.nz*across,along)];
     }
-    function bridgeStrip(material,start,finish,y,height,width,offset,textureRepeats=1){
+    function bridgeStrip(material,start,finish,y,height,width,offset,deckNormal){
       if(!stripBatches.has(material))stripBatches.set(material,{positions:[],uvs:[],indices:[]});
       const {positions,uvs,indices}=stripBatches.get(material);
       const base=positions.length/3;
       for(let v=0;v<boxPositions.count;v++){
         const [x,z]=bridgePoint(start,finish,boxPositions.getZ(v)+.5,offset+boxPositions.getX(v)*width);
         positions.push(x,y+boxPositions.getY(v)*height,z);
-        // The top and side faces use the longitudinal axis of the texture.
-        const along=(boxPositions.getZ(v)+.5)*textureRepeats;
-        const across=boxPositions.getX(v)+.5;
+        let along=boxPositions.getZ(v)+.5,across=boxPositions.getX(v)+.5;
+        if(deckNormal){
+          // Measure along the bridge's center line at every vertex. A cut
+          // across a miter trims the end boards without stretching them.
+          const [nx,nz]=deckNormal;
+          along=((z-start.z)*nx-(x-start.x)*nz)/plankRepeatLength;
+          across*=width/plankLength;
+        }
         if(v<8)uvs.push(along,boxUVs.getY(v));
         else if(v<16)uvs.push(across,along);
         else uvs.push(boxUVs.getX(v),boxUVs.getY(v));
@@ -974,7 +1217,7 @@
       const finish=bridgeJoin(finishX,finishZ,normal,endsAtBend?next:null);
       const length=Math.hypot(finish.x-start.x,finish.z-start.z);
       const spans=Math.ceil(length/3.5),angle=Math.atan2(-normal[1],normal[0]);
-      bridgeStrip(timber,start,finish,-.13,.26,b.width,0,length/3.5);
+      bridgeStrip(timber,start,finish,-.13,.26,b.width,0,normal);
       for(const side of [-1,1]){
         const offset=side*(b.width/2-.065);
         bridgeStrip(cedar,start,finish,.60,.08,.065,offset);
@@ -1000,9 +1243,10 @@
       geo.computeVertexNormals();
       scene.add(reflected(new T.Mesh(geo,material)));
     }
-    batch(cube,timber,end[0],-.17,end[1],6.6,.34,landingDepth);
+    deck(end[0],end[1],6.6,landingDepth,.34);
     for(const side of [-1,1]){
       batch(cube,stone,end[0]+side*3.14,.18,end[1],.25,.55,4.6);
+      blockWalking(end[0]+side*3.14,end[1],.25,4.6);
       for(const dz of [-1.68,1.68])deckPile(end[0]+side*3.19,end[1]+dz);
       lantern(end[0]+side*3.10,1.06,end[1]-1.66,.96,true);
     }
@@ -1024,19 +1268,29 @@
       const angle=fullTurn*(i+rand()*.7)/44,dist=14+rand()*15;
       lantern(Math.sin(angle)*dist,4+rand()*7,-Math.cos(angle)*dist,.55+rand()*1.12);
     }
-    lightArchitecture([stone,edge,bronze,plinth,linen,photoMat,timber,blueTiles,cedar,railCap,plaster,darkTimber]);
+    lightArchitecture([stone,edge,bronze,plinth,linen,photoMat,pictureMetal,timber,blueTiles,
+      cedar,uprightCedar,railCap,plaster,darkTimber,mortar]);
     const lanternMeshes=pieces.map(([geometry,material])=>{
       const group=new T.InstancedMesh(geometry,material,lanterns.length);
       group.frustumCulled=false;scene.add(reflected(group));return group;
     });
     lanterns.forEach((_,i)=>lanternMeshes[0].setColorAt(i,color(['#ffffff','#ffdcbb','#ffedc9','#ffd1ac'][i%4])));
+    const hanging=lanterns.filter(lamp=>lamp.mountHeight>0);
+    hanging.forEach((lamp,i)=>lamp.cordIndex=i);
+    const cords=new T.InstancedMesh(new T.CylinderGeometry(.010,.010,1,8),bamboo,hanging.length);
+    cords.frustumCulled=false;
+    scene.add(reflected(cords));
+    const cord=new T.Object3D(),knottedEnd=new T.Vector3(),cordVector=new T.Vector3();
+    const cordUp=new T.Vector3(0,1,0);
     const support=new T.Object3D(),localPart=new T.Object3D(),partMatrix=new T.Matrix4();
     function updateLanterns(time){
       nightTime.value=reduced.matches?0:time;
       const t=nightTime.value;
-      lanterns.forEach(({x,y,z,size,phase,glow,fixture},i)=>{
+      lanterns.forEach(({x,y,z,size,phase,glow,fixture,mountHeight,cordIndex},i)=>{
         const lift=Math.sin(t*.36+phase), drift=Math.sin(t*.21+phase*1.2);
-        if(fixture){
+        if(mountHeight){
+          support.position.set(x+.057*drift,y+.024*lift,z+.034*Math.cos(t*.24+phase));
+        }else if(fixture){
           support.position.set(x+.12*drift,y+.17*lift,z+.078*Math.cos(t*.24+phase));
         }else{
           const flight=t*(.14+.014*(i%5))+phase;
@@ -1049,14 +1303,24 @@
         support.rotation.set(.04*lift,phase+.12*drift,.07*drift);
         support.scale.setScalar(size);support.updateMatrix();
         lanternMeshes.forEach((obj,j)=>{
-          localPart.position.set(0,j===4?.065:.0,0);localPart.rotation.set(0,j===3?Math.PI/2:0,0);
+          localPart.position.set(0,j===4?.088:0,0);localPart.rotation.set(0,j===3?Math.PI/2:0,0);
           localPart.updateMatrix();partMatrix.multiplyMatrices(support.matrix,localPart.matrix);
           obj.setMatrixAt(i,partMatrix);
         });
+        if(mountHeight){
+          knottedEnd.set(0,.679,0).applyMatrix4(support.matrix);
+          cordVector.set(x,mountHeight,z).sub(knottedEnd);
+          cord.position.copy(knottedEnd).addScaledVector(cordVector,.5);
+          cord.scale.set(1,cordVector.length(),1);
+          cord.quaternion.setFromUnitVectors(cordUp,cordVector.normalize());
+          cord.updateMatrix();
+          cords.setMatrixAt(cordIndex,cord.matrix);
+        }
         glow.position.set(support.position.x,support.position.y+.31*size,support.position.z);
-        glow.scale.setScalar(size*(1.7+.06*lift));
+        glow.scale.setScalar(size*(1.13+.037*lift));
       });
       lanternMeshes.forEach(obj=>obj.instanceMatrix.needsUpdate=true);
+      cords.instanceMatrix.needsUpdate=true;
     }
 
     if(location.protocol!=='file:'){
@@ -1086,9 +1350,9 @@
     const shades=new T.InstancedMesh(shadeGeometry,candlePaper(paper.clone()),lights.length);
     const hoops=new T.InstancedMesh(hoopGeometry,bamboo,lights.length);
     for(let i=0;i<lights.length;i++)shades.setColorAt(i,color(['#fff0d2','#e9af85','#ffdab8','#fff7de'][i%4]));
-    const halos=new T.InstancedMesh(new T.PlaneGeometry(1,1),new T.MeshBasicMaterial({
-      map:glowMap,transparent:true,depthWrite:false,blending:T.AdditiveBlending,opacity:.66
-    }),lights.length);
+    const halos=new T.InstancedMesh(new T.PlaneGeometry(1,1),softGlow(new T.MeshBasicMaterial({
+      map:glowMap,transparent:true,depthWrite:false,toneMapped:false,blending:T.AdditiveBlending,opacity:.45
+    })),lights.length);
     halos.renderOrder=2;
     for(const mesh of [shades,hoops,halos]){
       mesh.frustumCulled=false;formation.add(reflected(mesh));
@@ -1113,7 +1377,7 @@
         matrix.rotation.set(0,p.phase,.09*Math.sin(clock*.24+p.phase));
         matrix.scale.setScalar(p.size*T.MathUtils.smoothstep(t,5.5,7.4));
         matrix.updateMatrix();shades.setMatrixAt(i,matrix.matrix);hoops.setMatrixAt(i,matrix.matrix);
-        matrix.position.y+=matrix.scale.x*.3;matrix.rotation.set(0,0,0);matrix.scale.multiplyScalar(2.1);
+        matrix.position.y+=matrix.scale.x*.3;matrix.rotation.set(0,0,0);matrix.scale.multiplyScalar(1.52);
         matrix.updateMatrix();halos.setMatrixAt(i,matrix.matrix);
       }
       for(const mesh of [shades,hoops,halos])mesh.instanceMatrix.needsUpdate=true;
@@ -1178,19 +1442,48 @@
           gl_FragColor=vec4(glow,1.);
         }`);
     const combine=screenMaterial({
-      image:{value:film.texture},bloom:{value:glowWide.texture}
-    },`uniform sampler2D image,bloom;varying vec2 screenUV;
+      image:{value:film.texture},bloom:{value:glowWide.texture},
+      pixel:prefilter.uniforms.pixel,edgeBlend:{value:samples ? .74 : 1}
+    },`uniform sampler2D image,bloom;uniform vec2 pixel;uniform float edgeBlend;
+        varying vec2 screenUV;
+        float filmNoise(vec2 p){return fract(52.9829189*fract(dot(p,vec2(.06711056,.00583715))));}
+        float perceptualLuma(vec3 color){
+          return sqrt(clamp(dot(color,vec3(.2126,.7152,.0722)),0.,1.));
+        }
+        vec3 antiAliasedScene(vec2 uv){
+          vec3 center=texture2D(image,uv).rgb;
+          float nw=perceptualLuma(texture2D(image,uv+pixel*vec2(-1.,1.)).rgb);
+          float ne=perceptualLuma(texture2D(image,uv+pixel).rgb);
+          float sw=perceptualLuma(texture2D(image,uv-pixel).rgb);
+          float se=perceptualLuma(texture2D(image,uv+pixel*vec2(1.,-1.)).rgb);
+          float mid=perceptualLuma(center);
+          float low=min(mid,min(min(nw,ne),min(sw,se)));
+          float high=max(mid,max(max(nw,ne),max(sw,se)));
+          if(high-low<max(.018,.15*high))return center;
+          // FXAA-style sampling follows the high-contrast edge, with a
+          // luminance bound to retain narrow features against a dark sky.
+          vec2 edge=vec2((sw+se)-(nw+ne),(nw+sw)-(ne+se));
+          float reducer=max((nw+ne+sw+se)*.026,.0125);
+          edge=clamp(edge/(min(abs(edge.x),abs(edge.y))+reducer),-4.,4.)*pixel;
+          vec3 inner=.5*(texture2D(image,uv-edge/6.).rgb+texture2D(image,uv+edge/6.).rgb);
+          vec3 outer=.5*inner+.25*(texture2D(image,uv-edge*.5).rgb+texture2D(image,uv+edge*.5).rgb);
+          float sampled=perceptualLuma(outer);
+          vec3 filtered=sampled<low || sampled>high?inner:outer;
+          return mix(center,filtered,edgeBlend);
+        }
         void main(){
-          vec4 frame=texture2D(image,screenUV);
+          vec3 frame=antiAliasedScene(screenUV);
           vec3 glow=texture2D(bloom,screenUV).rgb;
           // Other surfaces have already passed through ACES. Roll off the
           // remaining HDR paper highlights gently before display encoding.
           float heat=max(frame.r,max(frame.g,frame.b));
-          vec3 paper=frame.rgb/max(1.,heat);
+          vec3 paper=frame/max(1.,heat);
           paper=mix(paper,vec3(1.,.92,.73),.28*smoothstep(1.,2.05,heat));
-          vec3 color=mix(frame.rgb,paper,smoothstep(.96,1.35,heat)) + glow*.52;
+          vec3 color=mix(frame,paper,smoothstep(.96,1.35,heat)) + glow*.52;
           gl_FragColor=vec4(clamp(color,0.,1.),1.);
           #include <encodings_fragment>
+          float noise=filmNoise(gl_FragCoord.xy)-filmNoise(gl_FragCoord.yx+31.37);
+          gl_FragColor.rgb=clamp(gl_FragColor.rgb+noise/255.,0.,1.);
         }`);
     const screenQuad=new T.Mesh(new T.PlaneGeometry(2,2),prefilter);
     screenQuad.frustumCulled=false;
@@ -1307,9 +1600,7 @@
       if(d>.01){
         guideHeading=Math.atan2(-dx,-dz);
         const step=Math.min(1,dt*3.25*(fastWalk?2.2:1)/d);
-        const oldX=p.x,oldZ=p.z;
-        p.x+=dx*step;p.z+=dz*step;
-        footfalls(oldX,oldZ);
+        walk(dx*step,dz*step);
       }
       yaw+=shortest(guideHeading-yaw)*Math.min(1,dt*3.5);
       pitch+=(.015-pitch)*Math.min(1,dt*2);
@@ -1335,16 +1626,29 @@
     function move(right,forward,turn,dt){
       yaw+=turn*dt*1.55;
       if(!right && !forward)return;
-      const k=dt*(fastWalk?6.6:3)/Math.max(1,Math.hypot(right,forward)),p=camera.position;
+      const k=dt*(fastWalk?6.6:3)/Math.max(1,Math.hypot(right,forward));
       const dx=(Math.cos(yaw)*right-Math.sin(yaw)*forward)*k;
       const dz=(-Math.sin(yaw)*right-Math.cos(yaw)*forward)*k;
+      walk(dx,dz);
+    }
+    function canWalk(x,z){
+      if(!riverWalk.walkable(x,z))return false;
+      const radius=.23;
+      return !blockers.some(box=>{
+        const dx=Math.max(0,Math.abs(x-box.x)-box.halfWidth);
+        const dz=Math.max(0,Math.abs(z-box.z)-box.halfDepth);
+        return dx*dx+dz*dz<radius*radius;
+      });
+    }
+    function walk(dx,dz){
+      const p=camera.position;
       const oldX=p.x,oldZ=p.z;
-      const steps=Math.ceil(Math.hypot(dx,dz)/.24);
+      const steps=Math.ceil(Math.hypot(dx,dz)/.12);
       for(let i=0;i<steps;i++){
         const x=p.x+dx/steps,z=p.z+dz/steps;
-        if(riverWalk.walkable(x,z)){p.x=x;p.z=z}
-        else if(riverWalk.walkable(x,p.z))p.x=x;
-        else if(riverWalk.walkable(p.x,z))p.z=z;
+        if(canWalk(x,z)){p.x=x;p.z=z}
+        else if(canWalk(x,p.z))p.x=x;
+        else if(canWalk(p.x,z))p.z=z;
       }
       footfalls(oldX,oldZ);
     }
