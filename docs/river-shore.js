@@ -1,7 +1,7 @@
 // Scenery shared by the riverbank geometry, lanterns, and water shader.
 const riverShore = (() => {
   const firstZ=-272,lastZ=114,halfWidth=64;
-  const offsets=[-2.7,-.86,0,.50,1.1,2,3.2,4.9,7.2,10.8,16.6,25.2,39];
+  const offsets=[-2.7,-.86,0,.30,.66,1.1,1.8,2.65,3.65,4.9,6.4,8.4,11,16.6,25.2,39];
   const rows=Math.ceil((lastZ-firstZ)/.93),rowDepth=(lastZ-firstZ)/rows;
   const {rooms,bridges,bridgePoint,end,landingWidth,landingDepth}=riverWalk;
   const decks=[...rooms,{x:end[0],z:end[1],width:landingWidth,depth:landingDepth}];
@@ -44,6 +44,17 @@ const riverShore = (() => {
       return min(p.x-banks.x,banks.y-p.x);
     }
   `;
+  const mistShader=`
+    float lowRiverMist(vec3 eye,vec3 surface,float waterY,float time){
+      float nearHeight=max(0.,eye.y-waterY),farHeight=max(0.,surface.y-waterY);
+      float separation=abs(nearHeight-farHeight)*1.48;
+      float column=exp(-min(nearHeight,farHeight)*1.48)
+                 *(1.-exp(-max(.002,separation)))/max(.002,separation);
+      vec2 air=mix(eye.xz,surface.xz,.76)+time*vec2(.07,-.036);
+      float drift=.63+.25*sin(air.y*.119+air.x*.183)+.12*sin(air.y*.46-air.x*.23);
+      return 1.-exp(-max(0.,distance(eye,surface)-4.)*column*drift*.053);
+    }
+  `;
 
   function create(T,waterLevel,random){
     // The water and terrain use the same bank samples, including the coves around decks.
@@ -72,7 +83,10 @@ const riverShore = (() => {
       const slope=.35*Math.min(offset,3.5)+.103*Math.max(0,offset-3.5);
       const relief=.33*Math.sin(z*.21+side+offset*.58)
         +.20*Math.cos(z*.70-offset*.80+side)+.12*Math.sin(z*1.14+offset*1.57);
-      return waterLevel+slope+Math.min(1,Math.max(0,offset)*.42)*relief;
+      const shelf=T.MathUtils.smoothstep(offset,.18,1.7)*(1-T.MathUtils.smoothstep(offset,2.6,6.5));
+      const roots=.19*Math.sin(z*1.58-offset*2.06)+.105*Math.cos(z*2.13+offset*1.49+side);
+      return waterLevel+slope+Math.min(1,Math.max(0,offset)*.42)*relief
+             +shelf*(.14+.20*Math.sin(z*.58+side)+roots);
     }
     function ground(z,side,offset){
       // Match the triangles of the visible terrain so roots and stones sit on it.
@@ -110,51 +124,73 @@ const riverShore = (() => {
     return {ground,height,lanterns,profile,glow:new T.CanvasTexture(glowCanvas)};
   }
 
-  function pineBoughs(T,random){
+  function plantBuilder(T){
     const positions=[],tints=[];
-    function face(a,b,c,light){
-      positions.push(...a,...b,...c);
-      tints.push(light,light*.92,light*.96,light,light,light,light*.81,light*.87,light*.94);
-    }
-    for(let tier=0;tier<10;tier++){
-      const stem=.21+tier*.081;
-      const spread=.50*Math.pow(1-tier/10,1.10)*(.83+.33*random());
+    return {
+      face(a,b,c,base,tip=base,end=base){
+        positions.push(...a,...b,...c);
+        for(const shade of [base,tip,end])tints.push(shade*.92,shade,shade*.93);
+      },
+      geometry(){
+        const mesh=new T.BufferGeometry();
+        mesh.setAttribute('position',new T.Float32BufferAttribute(positions,3));
+        mesh.setAttribute('color',new T.Float32BufferAttribute(tints,3));
+        mesh.computeVertexNormals();
+        return mesh;
+      }
+    };
+  }
+
+  function pineBoughs(T,random){
+    const near=plantBuilder(T),far=plantBuilder(T);
+    const tiers=9+Math.floor(random()*3),lowest=.17+random()*.11;
+    const lean=(random()-.5)*.092;
+    for(let tier=0;tier<tiers;tier++){
+      const level=tier/tiers;
+      const stem=lowest+(1-lowest)*level;
+      const spread=.52*Math.pow(1-level,1.18)*(.74+.43*random());
       const phase=random()*Math.PI*2;
-      const branches=tier>7?4:6;
+      const branches=4+Math.floor(random()*(level>.70?2:4));
       for(let b=0;b<branches;b++){
-        const angle=phase+(b+(random()-.5)*.52)*Math.PI*2/branches;
+        const angle=phase+(b+(random()-.5)*.69)*Math.PI*2/branches;
         const x=Math.cos(angle),z=Math.sin(angle);
-        const reach=spread*(.65+.39*random()),y=stem+(random()-.5)*.07;
-        const droop=.023+random()*.057;
-        const point=(out,across,height)=>[reach*(x*out-z*across),y+height,reach*(z*out+x*across)];
-        const root=point(0,0,.040),ridge=point(.42,0,.030),tip=point(1,0,-droop);
-        const light=.60+.37*random();
+        const reach=spread*(.56+.49*random()),y=stem+(random()-.5)*.086;
+        const droop=.018+random()*.052;
+        const point=(out,across,height)=>[reach*(x*out-z*across)+lean*level,y+height,reach*(z*out+x*across)];
+        const root=point(0,0,.003),ridge=point(.37,0,.026),tip=point(1.04,0,-droop);
+        const light=.66+.31*random();
+        near.face(root,point(.43,-.065,.002),ridge,light*.51);
+        near.face(root,ridge,point(.43,.065,.002),light*.51);
         for(const k of [-1,1]){
-          const shoulder=point(.33,k*(.41+random()*.17),-.025);
-          const tiplet=point(.74,k*(.29+random()*.23),-droop*.64);
-          const spur=point(.49,k*(.57+random()*.24),-.04);
-          face(root,shoulder,ridge,light);
-          face(shoulder,tiplet,ridge,light*.89);
-          face(tiplet,tip,ridge,light);
-          face(shoulder,spur,tiplet,light*.83);
+          const shoulder=point(.46,k*(.35+random()*.12),-.020);
+          const tiplet=point(.84,k*(.20+random()*.18),-droop*.67);
+          far.face(root,shoulder,ridge,light*.78,light,light);
+          far.face(shoulder,tiplet,ridge,light,light*.90,light);
+          far.face(tiplet,tip,ridge,light*.9,light,light);
+          near.face(root,point(.54,k*.24,-.016),ridge,light*.58,light*.87,light);
+          near.face(ridge,point(.62,k*.13,-.017),tip,light*.84,light,light*.85);
+          for(let j=0;j<4;j++){
+            const along=.32+j*.142+(random()-.5)*.06;
+            const width=.25*(1-j*.145)*(.74+random()*.59);
+            const sprig=point(along+.24,k*width,-droop*(.53+j*.083));
+            const base=point(along-.10,k*.065,-droop*.20),inner=point(along+.12,k*.036,-droop*.46);
+            const side=point(along+.055,k*(width*.84),-droop*.30+.016);
+            near.face(base,side,sprig,light*.65,light,light*.95);
+            near.face(base,sprig,inner,light*.65,light*.95,light*.78);
+          }
         }
       }
     }
-    const peakedTip=[.008,1,-.005],peakBase=[[.038,.883,.021],[-.032,.88,.019],[.004,.885,-.042]];
-    for(let i=0;i<3;i++)face(peakBase[i],peakedTip,peakBase[(i+1)%3],.83);
-    const mesh=new T.BufferGeometry();
-    mesh.setAttribute('position',new T.Float32BufferAttribute(positions,3));
-    mesh.setAttribute('color',new T.Float32BufferAttribute(tints,3));
-    mesh.computeVertexNormals();
-    return mesh;
+    const peakedTip=[lean,1,-.005],peakBase=[[lean+.035,.87,.019],[lean-.03,.88,.021],[lean,.87,-.038]];
+    for(let i=0;i<3;i++){
+      near.face(peakBase[i],peakedTip,peakBase[(i+1)%3],.77);
+      far.face(peakBase[i],peakedTip,peakBase[(i+1)%3],.77);
+    }
+    return {near:near.geometry(),far:far.geometry()};
   }
 
   function tuft(T,random,blades,seedHeads,widthScale=1){
-    const positions=[],tints=[];
-    function triangle(a,b,c,base,tip,end){
-      positions.push(...a,...b,...c);
-      for(const shade of [base,tip,end])tints.push(shade,shade,shade);
-    }
+    const plant=plantBuilder(T),triangle=plant.face;
     for(let i=0;i<blades;i++){
       const angle=random()*Math.PI*2,dx=Math.cos(angle),dz=Math.sin(angle);
       const height=.47+.53*random(),lean=.20+random()*.56,width=(.025+random()*.046)*widthScale;
@@ -170,22 +206,175 @@ const riverShore = (() => {
       const x=(random()-.5)*.68,z=(random()-.5)*.68,height=.86+random()*.24;
       for(const [dx,dz] of [[1,0],[0,1]]){
         triangle([x-.013*dx,0,z-.013*dz],[x+.013*dx,0,z+.013*dz],[x,height,z],.48,.48,.68);
-        const left=[x-.042*dx,height-.10,z-.042*dz],right=[x+.042*dx,height-.10,z+.042*dz];
-        triangle(left,right,[x,height+.11,z],.46,.46,.61);
-        triangle(left,[x,height-.20,z],right,.46,.45,.46);
+        const left=[x-.025*dx,height-.08,z-.025*dz],right=[x+.025*dx,height-.08,z+.025*dz];
+        triangle(left,right,[x,height+.075,z],.46,.46,.61);
+        triangle(left,[x,height-.18,z],right,.46,.45,.46);
       }
     }
-    const mesh=new T.BufferGeometry();
-    mesh.setAttribute('position',new T.Float32BufferAttribute(positions,3));
-    mesh.setAttribute('color',new T.Float32BufferAttribute(tints,3));
-    mesh.computeVertexNormals();
-    return mesh;
+    return plant.geometry();
   }
 
-  function landscape(T,{scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random,slate}){
+  function fern(T,random){
+    const plant=plantBuilder(T);
+    for(let i=0;i<6;i++){
+      const angle=(i+(random()-.5)*.52)*Math.PI/3;
+      const dx=Math.cos(angle),dz=Math.sin(angle);
+      const stretch=.55+random()*.38,rise=.41+random()*.46;
+      const point=(t,u,h=0)=>[dx*stretch*t-dz*u,rise*(1.68*t-.95*t*t)+h,dz*stretch*t+dx*u];
+      for(let j=0;j<7;j++){
+        const t=j/7,top=(j+1)/7;
+        plant.face(point(t,0),point(top,0),point(t,.013),.47,.74,.72);
+        if(j===0)continue;
+        const reach=(.067+.105*Math.sin(Math.PI*t))*(1-.32*t);
+        for(const side of [-1,1]){
+          const root=point(t,0),tip=point(t+.18,reach*side,-.045);
+          const inner=point(t+.043,reach*.48*side,.015),outer=point(t+.123,reach*.43*side,.012);
+          plant.face(root,inner,tip,.58,.86,.72);
+          plant.face(root,tip,outer,.58,.72,.88);
+        }
+      }
+    }
+    return plant.geometry();
+  }
+
+  function foliageCards(T){
+    const positions=[],uvs=[],colors=[];
+    return {
+      add(tile,point,light,steps=1){
+        // Each tile has transparent padding at its edges for mipmaps.
+        const width=.5,left=tile%2*width,top=1-Math.floor(tile/2)*width;
+        const lanes=steps>1?2:1;
+        for(let i=0;i<steps;i++)for(let j=0;j<lanes;j++){
+          const a=i/steps,b=(i+1)/steps,c=j/lanes,d=(j+1)/lanes;
+          for(const [u,v] of [[a,c],[b,c],[b,d],[a,c],[b,d],[a,d]]){
+            positions.push(...point(u,v));
+            uvs.push(left+u*width,top-(1-v)*width);
+            const shade=light*(.80+.20*u);
+            colors.push(shade,shade,shade);
+          }
+        }
+      },
+      geometry(){
+        const geometry=new T.BufferGeometry();
+        geometry.setAttribute('position',new T.Float32BufferAttribute(positions,3));
+        geometry.setAttribute('uv',new T.Float32BufferAttribute(uvs,2));
+        geometry.setAttribute('color',new T.Float32BufferAttribute(colors,3));
+        geometry.computeVertexNormals();
+        return geometry;
+      }
+    };
+  }
+
+  function paintedPines(T,random){
+    const near=foliageCards(T),far=foliageCards(T);
+    const tiers=9+Math.floor(random()*3),lowest=.17+random()*.11;
+    const drift=(random()-.5)*.09;
+    for(let tier=0;tier<tiers;tier++){
+      const level=tier/tiers,spin=random()*Math.PI*2;
+      const spread=.51*Math.pow(1-level,1.13)*(.89+.20*random());
+      const branches=level>.64?4:6;
+      for(let i=0;i<branches;i++){
+        const azimuth=spin+(i+(random()-.5)*.58)*Math.PI*2/branches;
+        const x=Math.cos(azimuth),z=Math.sin(azimuth);
+        const reach=spread*(.72+.40*random()),radius=reach*(.36+.13*random());
+        const rise=lowest+(1-lowest)*level+(random()-.5)*.067;
+        const fall=(.031+random()*.036)*(1-.62*level);
+        const tile=(i+tier)%2,shade=.68+.31*random();
+        function bough(tilt,spreadAngle=0,scale=1,attach=0){
+          const dx=Math.cos(azimuth+spreadAngle),dz=Math.sin(azimuth+spreadAngle);
+          return (u,v)=>{
+            const t=u*1.10-.055,k=v*2-1;
+            const across=radius*scale*Math.cos(tilt)*k*(1-.28*u);
+            const up=radius*scale*Math.sin(tilt)*k*.72;
+            const camber=Math.sin(Math.PI*u)*(.016+.012*(1-k*k));
+            return [
+              drift*level+x*reach*attach+dx*reach*t*scale-dz*across,
+              rise-fall*(t*t*scale+attach)+up+camber,
+              z*reach*attach+dz*reach*t*scale+dx*across
+            ];
+          };
+        }
+        const angle=(i%2?-1:1)*(.39+.27*random());
+        const main=bough(angle);
+        near.add(tile,main,shade,3);
+        far.add(tile,main,shade);
+        const side=i%2?1:-1;
+        near.add(1-tile,bough(angle+side*.82,side*.54,.64,.25),shade*.86,2);
+        near.add(tile,bough(angle-side*.62,-side*.43,.52,.36),shade*.88,2);
+      }
+    }
+    // Several upright sprigs close the crown without a solid cone.
+    for(const angle of [0,Math.PI/3,2*Math.PI/3]){
+      const x=Math.cos(angle)*.064,z=Math.sin(angle)*.064;
+      const crown=(u,v)=>[drift+(2*v-1)*x*(1-u*.58),.855+.137*u,(2*v-1)*z*(1-u*.58)];
+      near.add(1,crown,.75);far.add(1,crown,.75);
+    }
+    return {near:near.geometry(),far:far.geometry()};
+  }
+
+  function paintedUnderstory(T,tile,lean,width=1){
+    const cards=foliageCards(T);
+    for(let i=0;i<3;i++){
+      const angle=i*Math.PI/3;
+      const x=Math.cos(angle)*width*.52,z=Math.sin(angle)*width*.52;
+      const overhang=lean*(i===1?-1:1);
+      cards.add(tile,(u,v)=>{
+        const spread=u*2-1,bend=overhang*v*v;
+        return [spread*x+z*bend,v-.095-.068*spread*spread*v,spread*z-x*bend];
+      },1-i*.11,2);
+    }
+    return cards.geometry();
+  }
+
+  function shoreRock(T,variant){
+    const rock=new T.IcosahedronGeometry(.5,variant===1?3:2);
+    const vertices=rock.attributes.position;
+    const tonedNormals=new Map(),vertexKeys=[];
+    for(let i=0;i<vertices.count;i++){
+      const x=vertices.getX(i),y=vertices.getY(i),z=vertices.getZ(i);
+      const seam=y+.12*x-.10*z;
+      const weathering=.07*Math.sin(x*13.8+z*8.9+variant)+.045*Math.cos(z*15.1-y*9.7-variant);
+      const shelf=variant===1?.015:.043;
+      const band=shelf*Math.tanh(13*(seam+.14))-shelf*.86*Math.tanh(18*(seam-.115));
+      const width=1+weathering+band*2;
+      const crown=variant===1?.42:.29;
+      vertexKeys.push([x,y,z].map(value=>Math.round(value*10000)).join(','));
+      vertices.setXYZ(i,x*width+y*.091,Math.min(crown+.056*Math.sin(z*5+x*3),y*.91+band),z*width-x*.08);
+    }
+    rock.computeVertexNormals();
+    const normals=rock.attributes.normal;
+    const face=new T.Vector3(),smooth=new T.Vector3();
+    for(let i=0;i<normals.count;i++){
+      const key=vertexKeys[i];
+      if(!tonedNormals.has(key))tonedNormals.set(key,new T.Vector3());
+      tonedNormals.get(key).add(face.fromBufferAttribute(normals,i));
+    }
+    for(let i=0;i<normals.count;i++){
+      smooth.copy(tonedNormals.get(vertexKeys[i])).normalize();
+      face.fromBufferAttribute(normals,i).lerp(smooth,.82).normalize();
+      normals.setXYZ(i,face.x,face.y,face.z);
+    }
+    return rock;
+  }
+
+  function landscape(T,{scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random,slate,wood,foliage,paintedStone,forestFloor,time,moonDirection}){
     const litHeight=waterLevel.toFixed(2);
     const lightMapOffset=(halfWidth*2).toFixed(1);
     const lightMapLength=(lastZ-firstZ).toFixed(1);
+    const contactCanvas=document.createElement('canvas');
+    contactCanvas.width=256;contactCanvas.height=1024;
+    const contact=contactCanvas.getContext('2d');
+    contact.scale(contactCanvas.width/(halfWidth*2),contactCanvas.height/(lastZ-firstZ));
+    contact.translate(halfWidth,-firstZ);
+    const groundContacts=new T.CanvasTexture(contactCanvas);
+    function darkenGround(x,z,radius){
+      const falloff=contact.createRadialGradient(x,z,0,x,z,radius);
+      falloff.addColorStop(0,'rgba(0,0,0,.68)');
+      falloff.addColorStop(.43,'rgba(0,0,0,.36)');
+      falloff.addColorStop(1,'rgba(0,0,0,0)');
+      contact.fillStyle=falloff;
+      contact.fillRect(x-radius,z-radius,radius*2,radius*2);
+    }
     const texture=slate || painted(128,(ctx,size)=>{
       const image=ctx.createImageData(size,size);
       for(let i=0;i<image.data.length;i+=4){
@@ -195,16 +384,36 @@ const riverShore = (() => {
       ctx.putImageData(image,0,0);
     });
     texture.wrapS=texture.wrapT=T.RepeatWrapping;
-    function surface(tint,{vertexColors=false,twoSided=false,ground=false,rim=false}={}){
+    if(foliage){
+      foliage.encoding=T.sRGBEncoding;
+      foliage.anisotropy=4;
+    }
+    for(const paint of [paintedStone,forestFloor].filter(Boolean)){
+      paint.wrapS=paint.wrapT=T.MirroredRepeatWrapping;
+      paint.anisotropy=4;
+    }
+    function surface(tint,{vertexColors=false,twoSided=false,ground=false,rock=false,rim=false,bark=false,cards=false}={}){
       const material=new T.MeshStandardMaterial({
-        color:color(tint),roughness:.86,vertexColors,side:twoSided?T.DoubleSide:T.FrontSide
+        color:color(tint),roughness:twoSided?.72:.86,vertexColors,side:twoSided?T.DoubleSide:T.FrontSide,
+        map:cards?foliage:null,alphaTest:cards?.39:0
       });
-      material.customProgramCacheKey=()=>ground?'river-ground':rim?'river-needles':'river-understory';
+      material.customProgramCacheKey=()=>ground?'river-ground':rock?'river-rock':rim?'river-needles':bark?'river-bark':'river-understory';
       material.onBeforeCompile=shader=>{
         addRiverMist(shader);
+        const pigment=ground?forestFloor||paintedStone:rock?paintedStone:null;
         shader.uniforms.shoreSpill={value:shore.glow};
-        shader.uniforms.shoreGrain={value:texture};
-        shader.fragmentShader='uniform sampler2D shoreSpill,shoreGrain;\n'+shader.fragmentShader.replace(
+        shader.uniforms.shoreGrain={value:bark&&wood?wood:texture};
+        if(pigment)shader.uniforms.shorePaint={value:pigment};
+        if(ground)shader.uniforms.groundContacts={value:groundContacts};
+        shader.uniforms.shoreTime=time;
+        shader.uniforms.shoreMoon=moonDirection;
+        if(bark)shader.vertexShader='varying vec2 barkUV;\n'+shader.vertexShader.replace(
+          '#include <begin_vertex>','#include <begin_vertex>\n barkUV=uv;');
+        const barkCoordinate=bark?'varying vec2 barkUV;\n':'';
+        shader.fragmentShader=barkCoordinate+mistShader+'uniform sampler2D shoreSpill,shoreGrain;\n'
+          +(pigment?'uniform sampler2D shorePaint;\n':'')
+          +(ground?'uniform sampler2D groundContacts;\n':'')
+          +'uniform float shoreTime; uniform vec3 shoreMoon;\n'+shader.fragmentShader.replace(
           '#include <lights_fragment_maps>',`
           #include <lights_fragment_maps>
           vec2 spillUV=vec2((riverSurface.x+${halfWidth.toFixed(1)})/${lightMapOffset},
@@ -216,43 +425,76 @@ const riverShore = (() => {
             float east=texture2D(shoreSpill,spillUV+vec2(.44/${lightMapOffset},0.)).a;
             float south=texture2D(shoreSpill,spillUV-vec2(0.,.44/${lightMapLength})).a;
             vec3 toLamp=normalize(vec3((east-spill)*3.4,.35,(south-spill)*3.4));
+            float flame=.94+.042*sin(shoreTime*2.6+floor(riverSurface.z*.25)*1.69)
+                            +.018*sin(shoreTime*5.0+riverSurface.x);
             directLight.direction=mat3(viewMatrix)*toLamp;
-            directLight.color=vec3(3.5,1.36,.47)*bankLight;
+            directLight.color=vec3(4.15,1.66,.61)*bankLight*flame;
             directLight.visible=true;
             RE_Direct(directLight,geometry,material,reflectedLight);
-            irradiance+=vec3(.92,.36,.14)*bankLight;
+            irradiance+=vec3(.67,.28,.11)*bankLight*flame;
+            ${twoSided?`
+            float scatter=1.-abs(dot(geometry.normal,directLight.direction));
+            irradiance+=vec3(.64,.22,.064)*scatter*scatter*bankLight*flame;`:''}
           }
           ${rim?`
           vec3 facing=inverseTransformDirection(geometry.normal,viewMatrix);
           float edge=pow(1.-max(0.,dot(geometry.normal,geometry.viewDir)),2.);
-          float lightFacing=smoothstep(-.46,.94,dot(facing,normalize(vec3(-.51,.46,.72))));
-          irradiance+=vec3(.17,.28,.40)*edge*lightFacing;`:''}
+          float lightFacing=smoothstep(-.40,.93,dot(facing,shoreMoon));
+          irradiance+=vec3(.21,.34,.49)*edge*lightFacing;`:''}
+          ${ground?`
+          float contactShade=texture2D(groundContacts,spillUV).a;
+          irradiance*=1.-.81*contactShade;
+          reflectedLight.directDiffuse*=1.-.39*contactShade;
+          reflectedLight.directSpecular*=1.-.48*contactShade;`:''}
         `).replace('gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor,mistAmount);',`
-          float bankMist=(1.-exp(-max(0.,mistDepth-13.)*.027))*exp(-surfaceHeight*.73);
-          gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor,min(.89,mistAmount+bankMist*.26));
+          gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor,mistAmount);
+          float pooledMist=lowRiverMist(cameraPosition,riverSurface,${litHeight},shoreTime);
+          gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor*1.61,pooledMist*.39);
         `);
-        if(ground)shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
+        if(ground || rock || bark)shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
           #include <color_fragment>
-          vec2 terrainUV=riverSurface.xz+riverSurface.y*vec2(.38,.56);
+          vec2 terrainUV=${bark?'barkUV*vec2(6.,1.72)':'riverSurface.xz+riverSurface.y*vec2(.38,.56)'};
           vec3 grain=texture2D(shoreGrain,terrainUV*.78).rgb;
           float mineral=texture2D(shoreGrain,terrainUV*.188).g;
-          float wet=1.-smoothstep(.025,.48,riverSurface.y-(${litHeight})+(.5-mineral)*.19);
-          diffuseColor.rgb*=mix(.70,1.32,mineral)*mix(.82,1.16,grain.b)*mix(vec3(1.),vec3(.48,.57,.66),wet);
+          float wet=1.-smoothstep(.022,.59,riverSurface.y-(${litHeight})+(grain.r-.5)*.30);
+          float moss=smoothstep(.42,.71,mineral+.15*(grain.r-.5))*(1.-wet*.64);
+          diffuseColor.rgb*=mix(.64,1.46,smoothstep(.12,.79,mineral))*mix(.74,1.24,smoothstep(.12,.83,grain.b));
+          diffuseColor.rgb*=mix(vec3(1.),vec3(.65,1.11,.63),moss*.43)*mix(vec3(1.),vec3(.45,.50,.53),wet);
+          ${pigment?`
+          ${rock?`
+          vec3 axes=abs(inverseTransformDirection(normalize(vNormal),viewMatrix));
+          vec3 weights=pow(axes,vec3(4.));
+          weights/=max(.001,weights.x+weights.y+weights.z);
+          vec3 stoneUV=riverSurface*.84;
+          vec3 brush=texture2D(shorePaint,stoneUV.zy).rgb*weights.x
+                   +texture2D(shorePaint,stoneUV.xz).rgb*weights.y
+                   +texture2D(shorePaint,stoneUV.xy).rgb*weights.z;
+          float paintGrain=dot(brush,vec3(.30,.55,.15));
+          float lichen=smoothstep(.012,.072,brush.g-brush.b)*(1.-wet*.80);
+          diffuseColor.rgb*=mix(vec3(.58),vec3(1.56),smoothstep(.13,.55,paintGrain))
+                           *mix(vec3(1.),vec3(.77,1.03,.56),lichen*.72);`:`
+          vec3 brush=texture2D(shorePaint,terrainUV*.67).rgb;
+          float paintGrain=dot(brush,vec3(.30,.55,.15));
+          diffuseColor.rgb*=clamp(.45+(brush-.13)*2.65,.47,1.63);`}`:`
+          float paintGrain=.46;`}
+          ${ground?`
+          float litter=texture2D(shoreGrain,terrainUV*.283+vec2(.33,.76)).b;
+          diffuseColor.rgb*=mix(vec3(.83,1.04,.77),vec3(1.41,1.14,.87),smoothstep(.24,.73,litter));`:''}
         `).replace('#include <roughnessmap_fragment>',`
           #include <roughnessmap_fragment>
-          roughnessFactor=clamp(roughnessFactor+.22*(grain.g-.5)-wet*.32,.43,.98);
+          roughnessFactor=clamp(roughnessFactor+.24*(grain.g-.5)-wet*${rock?'.54':'.23'},${rock?'.25':'.51'},.98);
         `).replace('#include <normal_fragment_maps>',`
           #include <normal_fragment_maps>
           vec3 dx=dFdx(-vViewPosition),dy=dFdy(-vViewPosition);
           vec3 tx=cross(dy,normal),ty=cross(normal,dx);
-          float det=dot(dx,tx),height=.006*grain.r+.022*mineral;
+          float det=dot(dx,tx),height=${bark?'.012*grain.r+.012*mineral':'.007*grain.r+.023*mineral+.014*paintGrain'};
           vec3 slope=sign(det)*(tx*dFdx(height)+ty*dFdy(height));
           normal=normalize(max(abs(det),1e-7)*normal-slope);
         `);
-        if(rim)shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
+        if(twoSided && !cards)shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
           #include <color_fragment>
           float textureGrain=texture2D(shoreGrain,riverSurface.xz*1.7+riverSurface.y*vec2(.64,.91)).r;
-          diffuseColor.rgb*=mix(.78,1.31,smoothstep(.09,.73,textureGrain));
+          diffuseColor.rgb*=mix(.73,1.35,smoothstep(.11,.73,textureGrain));
         `);
       };
       return material;
@@ -261,7 +503,7 @@ const riverShore = (() => {
     const earth=surface('#ffffff',{vertexColors:true,ground:true});
     for(const side of [-1,1]){
       const positions=[],tints=[],index=[];
-      const soil=color('#3c3a2c'),grass=color('#2f4838'),silt=color('#343332'),upland=color('#37443d');
+      const soil=color('#645144'),grass=color('#48523d'),silt=color('#514943'),upland=color('#454b3e');
       for(let row=0;row<=rows;row++){
         const z=firstZ+row*rowDepth;
         const bank=bankX(z,side);
@@ -318,34 +560,24 @@ const riverShore = (() => {
       }
     }
 
-    const pineShapes=Array.from({length:3},()=>pineBoughs(T,random));
-    const needles=['#304941','#243e3a','#324945'].map(tint=>surface(tint,{
-      vertexColors:true,twoSided:true,rim:true
+    const pineShapes=Array.from({length:3},()=>foliage?paintedPines(T,random):pineBoughs(T,random));
+    const needles=(foliage?['#d0e3d9','#b8d6cd','#d7e2cd']:['#385047','#2b453d','#354a41']).map(tint=>surface(tint,{
+      vertexColors:true,twoSided:true,rim:true,cards:Boolean(foliage)
     }));
     const trunk=new T.CylinderGeometry(.28,.49,1,7);
-    const bark=surface('#4b4136',{ground:true});
-    const stoneShapes=Array.from({length:3},(_,i)=>{
-      const mesh=new T.IcosahedronGeometry(.5,1);
-      const p=mesh.attributes.position;
-      const rounded=mesh.attributes.normal.clone();
-      for(let j=0;j<p.count;j++){
-        const x=p.getX(j),y=p.getY(j),z=p.getZ(j);
-        const uneven=1+.16*Math.sin(x*11.9-y*5.7+z*9.2+i*2)+.11*Math.cos(z*18.1+x*4.6+i);
-        p.setXYZ(j,x*uneven+y*.14,Math.max(-.37,y*uneven),z*uneven);
-      }
-      mesh.computeVertexNormals();
-      const n=mesh.attributes.normal,face=new T.Vector3(),arc=new T.Vector3();
-      for(let j=0;j<n.count;j++){
-        face.fromBufferAttribute(n,j).lerp(arc.fromBufferAttribute(rounded,j),.58).normalize();
-        n.setXYZ(j,face.x,face.y,face.z);
-      }
-      return mesh;
-    });
-    const stones=['#6c706c','#555d61','#74756a'].map(tint=>surface(tint,{ground:true}));
-    const reeds=tuft(T,random,12,4),rushes=tuft(T,random,18,0),scrub=tuft(T,random,22,0,2.1);
-    const grass=surface('#394834',{vertexColors:true,twoSided:true});
-    const sedge=surface('#596747',{vertexColors:true,twoSided:true});
-    const bushes=surface('#43543e',{vertexColors:true,twoSided:true});
+    const bark=surface('#645244',{bark:true});
+    const stoneShapes=Array.from({length:3},(_,i)=>shoreRock(T,i));
+    const stones=['#72736a','#777a75','#797267'].map(tint=>surface(tint,{rock:true}));
+    const reeds=foliage?paintedUnderstory(T,3,.53):tuft(T,random,12,4);
+    const rushes=foliage?paintedUnderstory(T,3,.69,.92):tuft(T,random,18,0);
+    const scrub=foliage?paintedUnderstory(T,2,.81,1.22):tuft(T,random,22,0,1.45);
+    const fronds=foliage?paintedUnderstory(T,2,.42,1.36):fern(T,random);
+    const floorCover=foliage?paintedUnderstory(T,3,.31,1.05):tuft(T,random,13,0,.76);
+    const leafFinish={vertexColors:true,twoSided:true,cards:Boolean(foliage)};
+    const grass=surface(foliage?'#cccca5':'#4b5640',leafFinish);
+    const sedge=surface(foliage?'#d8d59e':'#596747',leafFinish);
+    const bushes=surface(foliage?'#c0dfaf':'#4e6246',leafFinish);
+    const sprouts=surface(foliage?'#c0c992':'#4c5838',leafFinish);
     const placement=new T.Object3D(),bounds=new T.Box3();
     function place(geometry,material,x,y,z,width,height,depth,spin,tilt=0){
       if(!geometry.boundingBox)geometry.computeBoundingBox();
@@ -359,6 +591,12 @@ const riverShore = (() => {
       batch(geometry,material,x,y,z,width,height,depth,spin,tilt);
       return true;
     }
+    function fallenWood(a,b,width){
+      const [dx,dy,dz]=b.map((value,i)=>value-a[i]);
+      const length=Math.hypot(dx,dy,dz);
+      return place(trunk,bark,(a[0]+b[0])*.5,(a[1]+b[1])*.5,(a[2]+b[2])*.5,
+        width,length,width,Math.atan2(dz,-dx),Math.atan2(Math.hypot(dx,dz),dy));
+    }
     for(const side of [-1,1]){
       for(let z=firstZ+3;z<lastZ-3;z+=5+random()*9){
         const count=4+Math.floor(random()*9);
@@ -369,46 +607,90 @@ const riverShore = (() => {
           const height=2.6+random()**.85*8.2;
           const width=height*(.31+random()*.23),spin=random()*Math.PI*2,tilt=(random()-.5)*.17;
           const base=shore.ground(pos,side,offset)-.13;
-          const trunkRun=height*.77, trunkRadius=height*(.027+random()*.013);
+          const trunkRun=height*.84, trunkRadius=height*(.029+random()*.014);
           const n=i%3;
-          if(!place(pineShapes[n],needles[n],x,base,pos,width,height,width*(.77+random()*.41),spin,tilt))continue;
+          const detail=offset<9.3 && pos>firstZ+37 && pos<37;
+          const canopy=detail?pineShapes[n].near:pineShapes[n].far;
+          if(!place(canopy,needles[n],x,base,pos,width,height,width*(.77+random()*.41),spin,tilt))continue;
           place(trunk,bark,x-Math.cos(spin)*Math.sin(tilt)*trunkRun/2,
             base+Math.cos(tilt)*trunkRun/2,pos+Math.sin(spin)*Math.sin(tilt)*trunkRun/2,
             trunkRadius,trunkRun,trunkRadius,spin,tilt);
+          darkenGround(x,pos,trunkRadius*.94+.22);
+          if(detail && i%3===0){
+            for(let root=0;root<3;root++){
+              const direction=spin+root*Math.PI*2/3;
+              const dx=Math.cos(direction)*(trunkRadius*1.55+.10),dz=Math.sin(direction)*(trunkRadius*1.55+.10);
+              const endX=x+dx,endZ=pos+dz;
+              const y=shore.ground(endZ,side,(endX-bankX(endZ,side))*side);
+              fallenWood([x+dx*.16,base+.20,pos+dz*.16],[endX,y-.01,endZ],trunkRadius*.49);
+            }
+          }
         }
       }
       const patches=[],rocks=[];
       for(let z=firstZ+2;z<lastZ-2;z+=2.5+random()*4.2){
         patches.push(z);
-        const count=3+Math.floor(random()*5);
+        const count=4+Math.floor(random()*5), ledges=random()<.58;
+        const bearing=Math.atan2(-1,bankX(z+.5,side)-bankX(z-.5,side));
         for(let i=0;i<count;i++){
-          const pos=z+(random()-.5)*3.9,offset=-.54+random()*2.8;
+          const pos=z+(random()-.5)*3.9,offset=-.67+random()*2.4;
           const x=bankX(pos,side)+side*offset;
-          const size=.15+1.10*random()**1.53;
-          const y=shore.ground(pos,side,offset)+size*.12;
-          const n=i%3;
-          if(place(stoneShapes[n],stones[n],x,y,pos,size*(.89+random()*.57),size*(.54+.37*random()),
-            size*(.68+random()*.59),random()*Math.PI*2,(random()-.5)*.45)){
-            rocks.push({x,z:pos,radius:size*.66});
+          const size=i===0?.83+random()*.71:.15+1.02*random()**1.72;
+          const y=shore.ground(pos,side,offset)+size*.062;
+          const n=ledges && i<3?i%2*2:i%3;
+          const w=size*(n===1?.92+random()*.31:1.32+random()*.37);
+          const h=size*(n===1?.69+random()*.37:.37+random()*.27);
+          const d=size*(.70+random()*.37),angle=bearing+(random()-.5)*1.10;
+          if(place(stoneShapes[n],stones[n],x,y,pos,w,h,d,angle,(random()-.5)*.24)){
+            rocks.push({x,z:pos,radius:Math.max(w,d)*.52});
+            darkenGround(x,pos,Math.max(w,d)*.64+.19);
+            if(i===0 && ledges){
+              const chipZ=pos+.28*d,chipOffset=offset-.20*w;
+              const chipX=bankX(chipZ,side)+side*chipOffset;
+              const chipY=shore.ground(chipZ,side,chipOffset)+h*.06;
+              place(stoneShapes[2],stones[2],chipX,chipY,chipZ,w*.79,h*.68,d*.76,angle+.16);
+            }
           }
         }
       }
+      const clearRock=(x,pos)=>!rocks.some(rock=>Math.abs(rock.z-pos)<rock.radius+.12
+        && Math.hypot(rock.x-x,rock.z-pos)<rock.radius+.12);
       for(const z of patches){
-        for(let i=0;i<7;i++){
-          const near=i<4;
-          const pos=z+(random()-.5)*(near?4.2:5.7),offset=near?-.22+random()*2.5:1.9+random()*6.7;
+        const count=9+Math.floor(random()*6),shelf=2.6+random()*2.7;
+        for(let i=0;i<count;i++){
+          const near=i<count*.53;
+          const pos=z+(random()-.5)*(near?4.2:5.7);
+          const offset=near?-.31+random()*2.5:shelf+(random()-.5)*5.1;
           const x=bankX(pos,side)+side*offset;
-          if(rocks.some(rock=>Math.abs(rock.z-pos)<rock.radius+.12
-            && Math.hypot(rock.x-x,rock.z-pos)<rock.radius+.12))continue;
+          if(!clearRock(x,pos))continue;
           const isReed=offset<.80;
-          const size=isReed?.48+.54*random():.29+.45*random();
-          place(near?(isReed?reeds:rushes):scrub,near?(isReed?sedge:grass):bushes,
+          const isFern=!near && random()<.54;
+          const size=isReed?.48+.54*random():(isFern?.57:.25)+.50*random();
+          place(near?(isReed?reeds:rushes):(isFern?fronds:scrub),near?(isReed?sedge:grass):bushes,
             x,shore.ground(pos,side,offset)-.075,pos,
             size*(1.+random()*.75),size,size,random()*Math.PI*2);
         }
+        for(let i=0;i<8;i++){
+          const pos=z+(random()-.5)*5.6,offset=.72+random()*5.5;
+          const x=bankX(pos,side)+side*offset;
+          if(!clearRock(x,pos))continue;
+          const spread=.56+random()*.61;
+          place(floorCover,sprouts,x,shore.ground(pos,side,offset)-.042,pos,
+            spread,.13+random()*.20,spread,random()*Math.PI*2);
+        }
+        if(random()>.26)continue;
+        const offset=1.2+random()*2.2,x=bankX(z,side)+side*offset;
+        const length=.65+random()*1.75,angle=random()*Math.PI*2,width=.09+random()*.11;
+        const dx=Math.cos(angle),dz=Math.sin(angle);
+        const rooted=(px,pz,lift)=>[px,shore.ground(pz,side,(px-bankX(pz,side))*side)+lift,pz];
+        const base=rooted(x,z,width*.14),tip=rooted(x+dx*length,z+dz*length,width*.20);
+        if(!fallenWood(base,tip,width))continue;
+        const knot=base.map((value,i)=>T.MathUtils.lerp(value,tip[i],.49));
+        const fork=rooted(knot[0]-dz*length*.33+dx*length*.27,knot[2]+dx*length*.33+dz*length*.27,width*.61);
+        fallenWood(knot,fork,width*.48);
       }
     }
   }
 
-  return {center,bankX,waterShader,create,landscape};
+  return {center,bankX,waterShader,mistShader,create,landscape};
 })();

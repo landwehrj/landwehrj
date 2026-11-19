@@ -301,6 +301,7 @@
         gl_Position=projectionMatrix*viewMatrix*p;}`,
       fragmentShader:`${samplePortrait}
         ${riverShore.waterShader}
+        ${riverShore.mistShader}
         uniform mat4 poolProjection;
         uniform sampler2D reflectedView,pileWakes;
         uniform vec4 wakeBounds;
@@ -388,10 +389,9 @@
           vec3 silt=vec3(.011,.017,.019);
           vec3 deepWater=mix(navy,silt,shallows*.20);
           vec3 river=mix(deepWater,lights+skyGlints,fresnel);
-          float bankHaze=mix(.42,1.,1.-smoothstep(2.,19.,bank));
-          float haze=(1.-exp(-max(dist-10.,0.)*.019))*smoothstep(.70,.999,grazing)*bankHaze;
-          haze*=.79+.21*sin(p.y*.24+p.x*.21+time*.12+1.1*sin(p.x*.31));
-          river=mix(river,vec3(.042,.064,.093),haze*.43*(1.-still));
+          float bankHaze=mix(.54,1.,1.-smoothstep(2.,19.,bank));
+          float haze=lowRiverMist(cameraPosition,world,${waterLevel.toFixed(2)},time);
+          river=mix(river,vec3(.042,.065,.095),haze*bankHaze*.44*(1.-still));
         if(still>.001){
           vec4 projected=poolProjection*vec4(world,1.);
           vec2 q=projected.xy/projected.w*.5+.5;
@@ -963,7 +963,9 @@
       }
     }
     riverShore.landscape(T,{
-      scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,slate:stonePores
+      scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,
+      slate:stonePores,wood:photoMaterials.wood,foliage:photoMaterials.foliage,
+      paintedStone:photoMaterials.paintedStone,forestFloor:photoMaterials.forestFloor,time:nightTime,moonDirection
     });
 
     // Thousands of distant envelopes use one point draw per pass. Their real
@@ -2564,10 +2566,14 @@
       const woodRequest=textureLoader.loadAsync('materials/wood-finish.webp?v=2').catch(()=>null);
       const slateRequest=textureLoader.loadAsync('materials/slate-finish.webp').catch(()=>null);
       const deckRequest=textureLoader.loadAsync('materials/deck-color.webp').catch(()=>null);
-      preparing=Promise.all([atlasRequest,woodRequest,slateRequest,deckRequest]).then(([atlas,wood,slate,deck])=>{
-        garden=makeGarden(atlas,{wood,slate,deck});
-      startFrames();
-    }).catch(showFallback);
+      const foliageRequest=textureLoader.loadAsync('materials/river-foliage.webp').catch(()=>null);
+      const stoneRequest=textureLoader.loadAsync('materials/river-painted-slate.webp').catch(()=>null);
+      const forestFloorRequest=textureLoader.loadAsync('materials/river-forest-floor.webp').catch(()=>null);
+      preparing=Promise.all([atlasRequest,woodRequest,slateRequest,deckRequest,foliageRequest,stoneRequest,forestFloorRequest])
+        .then(([atlas,wood,slate,deck,foliage,paintedStone,forestFloor])=>{
+          garden=makeGarden(atlas,{wood,slate,deck,foliage,paintedStone,forestFloor});
+          startFrames();
+        }).catch(showFallback);
     return preparing;
   }
   function enter(userGesture){
