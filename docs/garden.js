@@ -366,17 +366,27 @@
       }
     });
     limestone.wrapS=limestone.wrapT=T.RepeatWrapping;
-    const stonePores=painted(128,(ctx,n)=>{
+    const stonePores=painted(256,(ctx,n)=>{
       const random=seedRandom();
-      ctx.fillStyle='#aaaaaa';ctx.fillRect(0,0,n,n);
-      for(let i=0;i<2100;i++){
-        const x=random()*n,y=random()*n,r=.15+random()*.65;
-        ctx.fillStyle=i%4?'#50505066':'#e5e5e577';
-        ctx.beginPath();ctx.arc(x,y,r,0,fullTurn);ctx.fill();
+      // Red stores surface height and green stores the finish.
+      ctx.fillStyle='#a3a000';ctx.fillRect(0,0,n,n);
+      for(let i=0;i<8000;i++){
+        const x=random()*n,y=random()*n,r=.23+random()*.86;
+        ctx.fillStyle=i%5?'#49db0074':'#e866006a';
+        ctx.beginPath();ctx.ellipse(x,y,r,r*(.42+random()*.56),random()*fullTurn,0,fullTurn);ctx.fill();
+      }
+      for(let i=0;i<380;i++){
+        const x=random()*n,y=random()*n,r=1.15+random()*1.55;
+        const pit=ctx.createRadialGradient(x,y,0,x,y,r);
+        pit.addColorStop(0,'#2eec00b3');
+        pit.addColorStop(.55,'#66bc004a');
+        pit.addColorStop(1,'#66bc0000');
+        ctx.fillStyle=pit;ctx.fillRect(x-r,y-r,2*r,2*r);
       }
     });
     stonePores.encoding=T.LinearEncoding;
     stonePores.wrapS=stonePores.wrapT=T.RepeatWrapping;
+    stonePores.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
     const stone = new T.MeshStandardMaterial({map:limestone,color:color('#89939e'),roughness:.86});
     const edge = new T.MeshStandardMaterial({map:limestone,color:color('#849fa8'),roughness:.49});
     const bronze = new T.MeshStandardMaterial({color:color('#bc9b71'),roughness:.43,metalness:.28});
@@ -684,21 +694,21 @@
                         +texture2D(map,grainUV.xz)*stoneWeight.y
                         +texture2D(map,grainUV.xy)*stoneWeight.z;
               vec3 poresUV=riverSurface*2.75;
-              float pores=texture2D(riverStonePores,poresUV.zy).g*stoneWeight.x
-                         +texture2D(riverStonePores,poresUV.xz).g*stoneWeight.y
-                         +texture2D(riverStonePores,poresUV.xy).g*stoneWeight.z;
+              vec2 pores=texture2D(riverStonePores,poresUV.zy).rg*stoneWeight.x
+                        +texture2D(riverStonePores,poresUV.xz).rg*stoneWeight.y
+                        +texture2D(riverStonePores,poresUV.xy).rg*stoneWeight.z;
               float worn=smoothstep(.12,.69,stoneAxis.y)*(1.-smoothstep(.94,.999,stoneAxis.y));
               diffuseColor.rgb*=mapTexelToLinear(grain).rgb*(1.+worn*riverEdgeWear);
             `).replace('#include <roughnessmap_fragment>',`
               #include <roughnessmap_fragment>
-              roughnessFactor=clamp(roughnessFactor+(.73-grain.g)*.30+(.67-pores)*.12-worn*.16,.34,1.);
+              roughnessFactor=clamp(roughnessFactor+(.73-grain.g)*.30+(pores.g-.63)*.23-worn*.16,.34,1.);
             `).replace('#include <normal_fragment_maps>',`
               #include <normal_fragment_maps>
               // A small amount of relief follows the same unstretched projection.
               vec3 stoneDx=dFdx(-vViewPosition),stoneDy=dFdy(-vViewPosition);
               vec3 stoneTx=cross(stoneDy,normal),stoneTy=cross(normal,stoneDx);
               float stoneDet=dot(stoneDx,stoneTx);
-              float stoneHeight=.0028*grain.g+.00062*pores;
+              float stoneHeight=.0028*grain.g+.00125*pores.r;
               vec3 microRelief=sign(stoneDet)*(stoneTx*dFdx(stoneHeight)+stoneTy*dFdy(stoneHeight));
               normal=normalize(max(abs(stoneDet),1e-7)*normal-microRelief);
             `);
@@ -984,7 +994,30 @@
       for(let v=0;v<uvs.count;v++)uvs.setXY(v,uvs.getX(v)+.5,uvs.getY(v)+.5);
       return geometry;
     }
-    const beam=chamferedBlock(.063), trim=chamferedBlock(.035), capBlock=chamferedBlock(.105);
+    const beam=chamferedBlock(.063), trim=chamferedBlock(.035);
+    function roundedStone(rx,ry,rz){
+      const geometry=new T.BoxGeometry(1,1,1,5,5,5);
+      const position=geometry.getAttribute('position'),normal=geometry.getAttribute('normal');
+      const corner=new T.Vector3(),direction=new T.Vector3();
+      // Keep the centers of the faces flat and concentrate the grid on the
+      // bevels. The ellipsoid normals match across all six faces of the box.
+      for(let i=0;i<position.count;i++){
+        corner.fromBufferAttribute(position,i);
+        const sx=Math.sign(corner.x),sy=Math.sign(corner.y),sz=Math.sign(corner.z);
+        direction.set(
+          sx*Math.max(0,Math.abs(corner.x)*5-.5),
+          sy*Math.max(0,Math.abs(corner.y)*5-.5),
+          sz*Math.max(0,Math.abs(corner.z)*5-.5)
+        ).normalize();
+        position.setXYZ(i,sx*(.5-rx)+direction.x*rx,sy*(.5-ry)+direction.y*ry,sz*(.5-rz)+direction.z*rz);
+        direction.set(direction.x/rx,direction.y/ry,direction.z/rz).normalize();
+        normal.setXYZ(i,direction.x,direction.y,direction.z);
+      }
+      return geometry;
+    }
+    const wallBlock=roundedStone(.009,.019,.028);
+    const wallCap=roundedStone(.013,.15,.032);
+    const capBlock=roundedStone(.032,.15,.032);
     const plaster=new T.MeshStandardMaterial({map:limestone,color:color('#76858e'),roughness:.78});
     const mortar=new T.MeshStandardMaterial({color:color('#465162'),roughness:.91});
     const darkTimber=new T.MeshStandardMaterial({
@@ -1011,20 +1044,22 @@
     function stoneWall(alongX,fixed,from,to,capFrom,capTo){
       const length=to-from;
       const spans=Math.max(1,Math.round(length/1.12)),step=length/spans;
+      const rotation=alongX?0:Math.PI/2;
       function slab(geometry,material,start,finish,y,height,thickness){
         const mid=(start+finish)/2,span=finish-start;
-        batch(geometry,material,alongX?mid:fixed,y,alongX?fixed:mid,
-          alongX?span:thickness,height,alongX?thickness:span);
+        batch(geometry,material,alongX?mid:fixed,y,alongX?fixed:mid,span,height,thickness,rotation);
       }
-      slab(cube,mortar,from,to,.386,.758,.256);
+      // Run recessed mortar behind the joints in both the wall and its cap.
+      slab(cube,mortar,from,to,.386,.758,.280);
+      slab(cube,mortar,capFrom,capTo,.780,.076,.366);
       const mid=(capFrom+capTo)/2,span=capTo-capFrom;
       blockWalking(alongX?mid:fixed,alongX?fixed:mid,alongX?span:.394,alongX?.394:span);
       for(let i=0;i<spans;i++){
         const low=from+i*step,high=low+step;
-        const start=low+(i===0?0:.006),finish=high-(i===spans-1?0:.006);
-        slab(trim,stone,start,finish,.263,.528,.30);
-        slab(trim,plaster,start,finish,.640,.233,.31);
-        slab(capBlock,edge,i===0?capFrom:start,i===spans-1?capTo:finish,.784,.084,.394);
+        const start=low+(i===0?0:.004),finish=high-(i===spans-1?0:.004);
+        slab(wallBlock,stone,start,finish,.263,.528,.30);
+        slab(wallBlock,plaster,start,finish,.640,.233,.31);
+        slab(wallCap,edge,i===0?capFrom:start,i===spans-1?capTo:finish,.784,.084,.394);
       }
     }
     const profiles=[
