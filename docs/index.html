@@ -11,11 +11,12 @@
 <script defer src="coat.js"></script>
 <script defer src="memorial.js"></script>
 <script defer src="desk.js"></script>
-<script defer src="river-walk.js"></script>
+<script defer src="river-walk.js?v=bridge-joins"></script>
 <script defer src="river-portrait.js"></script>
 <script defer src="river-sounds.js?v=soaked"></script>
 <script defer src="river-audio.js?v=soaked"></script>
-<script defer src="garden.js"></script>
+<script defer src="river-gi.js?v=bridge-joins"></script>
+<script defer src="garden.js?v=bridge-joins"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -56,6 +57,7 @@
     <div class="garden-audio">
       <button id="garden-sound" class="garden-pill" aria-pressed="false">Music off</button>
       <button id="garden-ambience" class="garden-pill" aria-pressed="false">Ambience off</button>
+      <button id="garden-gi" class="garden-pill" aria-label="Ray-traced global illumination" aria-pressed="false" title="Ray-traced bounce lighting · Higher GPU cost" hidden>RTGI off</button>
     </div>
   </div>
   <div class="garden-bottom">

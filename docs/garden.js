@@ -6,10 +6,11 @@
   const walkPanel = dialog.querySelector('.garden-bottom');
   const music = document.querySelector('#garden-music');
   const sound = document.querySelector('#garden-sound');
+  const giButton = document.querySelector('#garden-gi');
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  const {rooms, bridges, route, trail, end} = riverWalk;
+  const {rooms,bridges,route,trail,end,landingDepth,lanternSpans,bridgePoint} = riverWalk;
   const order = [...rooms.flatMap(room=>room.photos),1];
   const finalIndex = order.length-1;
   const fullTurn = Math.PI*2;
@@ -80,7 +81,7 @@
   // Direct links have no entry click to unlock audio. The first walking or
   // viewing gesture can start the river without starting the music.
   function activateOnInteraction(e){
-    if(e.target.closest('#garden-ambience, #leave-garden') || e.key==='Escape')return;
+    if(e.target.closest('#garden-ambience, #garden-gi, #leave-garden') || e.key==='Escape')return;
     if(!ambience.playing)startAmbience();
   }
   dialog.addEventListener('pointerup',activateOnInteraction);
@@ -139,6 +140,19 @@
     const reflectionLayer=1;
     const reflected=obj=>{obj.layers.enable(reflectionLayer);return obj};
     const galleryHeights=[3.5,3.23,4.05,3.65,3.25];
+    const supportsGI=Boolean(giButton && renderer.capabilities.isWebGL2 && typeof riverGI!=='undefined');
+    const giUniforms=supportsGI?riverGI.uniforms(T):null;
+    const bounceBoxes=[];
+    const bounceMatrix=new T.Object3D();
+    let giEffect=null;
+    function bounceBox(material,x,y,z,w,h,d,rotation=0,tilt=0){
+      if(!supportsGI)return;
+      bounceMatrix.position.set(x,y,z);
+      bounceMatrix.scale.set(w,h,d);
+      bounceMatrix.rotation.set(0,rotation,tilt,'YXZ');
+      bounceMatrix.updateMatrix();
+      bounceBoxes.push({material,matrix:bounceMatrix.matrix.clone()});
+    }
 
     function addRiverMist(shader){
       shader.vertexShader='varying vec3 riverSurface;\n'+shader.vertexShader.replace(
@@ -382,7 +396,12 @@
       matrix.updateMatrix();batches.get(key).matrices.push(matrix.matrix.clone());
     }
 
-    const atlasMap=new T.TextureLoader().load(atlas.image,()=>draw(),undefined,()=>showFallback());
+    let ready=false;
+    const atlasMap=new T.TextureLoader().load(atlas.image,()=>{
+      if(ready)draw();
+    },undefined,()=>{
+      if(ready)showFallback(new Error('The photo atlas could not be decoded'));
+    });
     photoUniforms.photograph.value=atlasMap;
     atlasMap.encoding=T.sRGBEncoding;atlasMap.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
     const photoMat=new T.MeshStandardMaterial({
@@ -540,6 +559,7 @@
         material.customProgramCacheKey=()=>'river-'+profile;
         material.onBeforeCompile=shader=>{
           addRiverMist(shader);
+          if(giUniforms)riverGI.receive(shader,giUniforms);
           shader.uniforms.riverFixtures={value:lightmap};
           shader.uniforms.riverFixtureColor=warm;
           shader.uniforms.riverFixtureTime=nightTime;
@@ -947,6 +967,9 @@
     const uprightCedar=cedar.clone();
     uprightCedar.bumpScale=.014;
     uprightCedar.roughness=.73;
+    const walkwayTrim=cedar.clone();
+    walkwayTrim.color.copy(color('#a19888'));
+    walkwayTrim.roughness=.88;
     const railCap=new T.MeshStandardMaterial({color:color('#c18b54'),roughness:.41,metalness:.2});
     function chamferedBlock(radius){
       const half=.5-radius;
@@ -1030,6 +1053,7 @@
         const dx=(u1-u0)*half,dy=y1-y0;
         const midX=x+(u0+u1)*half/2,midY=height+.16+(y0+y1)/2;
         const pitch=Math.atan2(dy,dx),length=Math.hypot(dx,dy);
+        bounceBox(roof,midX,midY+.05,z,length,.14,span,0,pitch);
         // Fascia and the exposed ends of the rafters follow the roof pitch.
         for(const end of [-1,1]){
           batch(beam,darkTimber,midX,midY,z+end*span/2,length,.16,.13,0,pitch);
@@ -1167,74 +1191,78 @@
         lantern(lampX,2.45,lampZ,.54,true,h+.37,h-.094);
       });
     });
-    const landingDepth=4.7;
     const stripBatches=new Map();
     const boxPositions=cube.getAttribute('position'),boxUVs=cube.getAttribute('uv');
-    function bridgeNormal(b){
-      return [(b.z-b.sz)/b.length,-(b.x-b.sx)/b.length];
+    function bridgeCut(bridge,distance,{nx,nz}=bridge.normal){
+      // Preserve the side lines when cutting a square threshold or a miter.
+      const t=distance/bridge.length;
+      return {
+        x:T.MathUtils.lerp(bridge.sx,bridge.x,t),z:T.MathUtils.lerp(bridge.sz,bridge.z,t),
+        nx,nz
+      };
     }
-    function bridgeJoin(x,z,normal,neighbor){
-      // On a turn the two strips share an exact miter. At a room or landing
-      // the strip meets the flat threshold at a constant world z instead.
-      if(!neighbor)return {x,z,nx:1/normal[0],nz:0};
-      const [nx,nz]=bridgeNormal(neighbor);
-      const scale=1/(1+normal[0]*nx+normal[1]*nz);
-      return {x,z,nx:(normal[0]+nx)*scale,nz:(normal[1]+nz)*scale};
-    }
-    function bridgePoint(start,finish,along,across){
-      return [T.MathUtils.lerp(start.x+start.nx*across,finish.x+finish.nx*across,along),
-              T.MathUtils.lerp(start.z+start.nz*across,finish.z+finish.nz*across,along)];
-    }
-    function bridgeStrip(material,start,finish,y,height,width,offset,deckNormal){
+    function bridgeStrip(material,start,finish,y,height,width,offset,normal,grain){
+      const [sx,sz]=bridgePoint(start,finish,0,offset);
+      const [ex,ez]=bridgePoint(start,finish,1,offset);
+      bounceBox(material,(sx+ex)*.5,y,(sz+ez)*.5,width,height,Math.hypot(ex-sx,ez-sz),
+        Math.atan2(ex-sx,ez-sz));
       if(!stripBatches.has(material))stripBatches.set(material,{positions:[],uvs:[],indices:[]});
       const {positions,uvs,indices}=stripBatches.get(material);
       const base=positions.length/3;
       for(let v=0;v<boxPositions.count;v++){
         const [x,z]=bridgePoint(start,finish,boxPositions.getZ(v)+.5,offset+boxPositions.getX(v)*width);
         positions.push(x,y+boxPositions.getY(v)*height,z);
-        let along=boxPositions.getZ(v)+.5,across=boxPositions.getX(v)+.5;
-        if(deckNormal){
-          // Measure along the bridge's center line at every vertex. A cut
-          // across a miter trims the end boards without stretching them.
-          const [nx,nz]=deckNormal;
-          along=((z-start.z)*nx-(x-start.x)*nz)/plankRepeatLength;
-          across*=width/plankLength;
-        }
+        const along=boxPositions.getZ(v)+.5,across=boxPositions.getX(v)+.5;
+        const run=(z-start.z)*normal.nx-(x-start.x)*normal.nz;
         if(v<8)uvs.push(along,boxUVs.getY(v));
+        // Measure in world units so the miter trims the end boards cleanly.
+        else if(v<16 && grain==='deck')uvs.push(across*width/plankLength,run/plankRepeatLength);
+        else if(v<16 && grain==='threshold')uvs.push(along,across*width/2.8);
+        else if(v<16 && grain==='border')uvs.push(across,run*.48);
         else if(v<16)uvs.push(across,along);
         else uvs.push(boxUVs.getX(v),boxUVs.getY(v));
       }
       for(const index of cube.index.array)indices.push(base+index);
     }
-    for(const [i,b] of bridges.entries()){
-      const previous=bridges[i-1],next=bridges[i+1],normal=bridgeNormal(b);
-      const startsAtBend=previous?.x===b.sx && previous.z===b.sz;
-      const endsAtBend=b.x===next?.sx && b.z===next.sz;
-      const atLanding=b.x===end[0] && b.z===end[1];
-      const finishZ=atLanding?end[1]+landingDepth/2:b.z;
-      const finishX=T.MathUtils.lerp(b.sx,b.x,(finishZ-b.sz)/(b.z-b.sz));
-      const start=bridgeJoin(b.sx,b.sz,normal,startsAtBend?previous:null);
-      const finish=bridgeJoin(finishX,finishZ,normal,endsAtBend?next:null);
-      const length=Math.hypot(finish.x-start.x,finish.z-start.z);
-      const spans=Math.ceil(length/3.5),angle=Math.atan2(-normal[1],normal[0]);
-      bridgeStrip(timber,start,finish,-.13,.26,b.width,0,normal);
+    for(const b of bridges){
+      const {start,finish,length,width,normal,startsAtBend,endsAtBend}=b;
+      const header=.23,miter=.074,border=.14,railInset=.37;
+      const boardStart=bridgeCut(b,startsAtBend?miter:header,start);
+      const boardFinish=bridgeCut(b,length-(endsAtBend?miter:header),finish);
+      bridgeStrip(walkwayTrim,start,boardStart,-.13,.26,width,0,normal,'threshold');
+      bridgeStrip(walkwayTrim,boardFinish,finish,-.13,.26,width,0,normal,'threshold');
+      bridgeStrip(timber,boardStart,boardFinish,-.13,.26,width-2*border,0,normal,'deck');
+      const railStart=startsAtBend?start:bridgeCut(b,railInset);
+      const railFinish=endsAtBend?finish:bridgeCut(b,length-railInset);
+      const spans=Math.ceil(Math.hypot(railFinish.x-railStart.x,railFinish.z-railStart.z)/3.5);
       for(const side of [-1,1]){
-        const offset=side*(b.width/2-.065);
-        bridgeStrip(cedar,start,finish,.60,.08,.065,offset);
-        bridgeStrip(bronze,start,finish,.33,.035,.028,offset);
-        for(let j=startsAtBend?1:0;j<=spans;j++){
-          const [px,pz]=bridgePoint(start,finish,j/spans,offset);
+        const offset=side*(width/2-border/2);
+        bridgeStrip(walkwayTrim,boardStart,boardFinish,-.13,.26,border,offset,normal,'border');
+        const railOffset=side*(width/2-.16);
+        bridgeStrip(cedar,railStart,railFinish,.60,.08,.065,railOffset,normal);
+        bridgeStrip(bronze,railStart,railFinish,.33,.035,.028,railOffset,normal);
+      }
+      for(let j=startsAtBend?1:0;j<=spans;j++){
+        const t=j/spans;
+        const [cx,cz]=bridgePoint(railStart,railFinish,t,0);
+        const [rx,rz]=bridgePoint(railStart,railFinish,t,1);
+        const angle=Math.atan2(cz-rz,rx-cx);
+        batch(beam,darkTimber,cx,-.30,cz,width+.10,.16,.16,angle);
+        for(const side of [-1,1]){
+          const [px,pz]=bridgePoint(railStart,railFinish,t,side*(width/2-.16));
           batch(cube,plinth,px,.12,pz,.15,1.25,.15,angle);
           batch(poolGeo,contact,px,.009,pz,.33,1,.35,angle);
           batch(cube,railCap,px,.75,pz,.17,.06,.17,angle);
         }
       }
-      if(b.sz<-75){
-        const cx=(b.x+b.sx)/2,cz=(b.z+b.sz)/2;
-        lantern(cx+normal[0]*2,.78,cz+normal[1]*2,.83,true);
-        if(i%2===0)lantern(cx-normal[0]*3.5,1.86,cz-normal[1]*3.5,.74,true);
-      }
     }
+    lanternSpans.forEach(([[sx,sz],[x,z]],i)=>{
+      if(sz>=-75)return;
+      const length=Math.hypot(x-sx,z-sz),nx=(z-sz)/length,nz=(sx-x)/length;
+      const cx=(x+sx)/2,cz=(z+sz)/2;
+      lantern(cx+nx*2,.78,cz+nz*2,.83,true);
+      if(i%2===0)lantern(cx-nx*3.5,1.86,cz-nz*3.5,.74,true);
+    });
     for(const [material,{positions,uvs,indices}] of stripBatches){
       const geo=new T.BufferGeometry();
       geo.setIndex(indices);
@@ -1257,9 +1285,9 @@
 
     // Lower lanterns drift beside the walk, close enough to watch their
     // reflections travel across the water from both banks of the boardwalk.
-    bridges.forEach((bridge,i)=>{
+    lanternSpans.forEach(([[sx,sz],[ex,ez]],i)=>{
       const side=i%2===0?1:-1;
-      const x=(bridge.sx+bridge.x)/2,z=(bridge.sz+bridge.z)/2;
+      const x=(sx+ex)/2,z=(sz+ez)/2;
       lantern(x+side*7.4,1.65+(i%3)*.40,z,.81+(i%4)*.075);
       if(i%3===0)lantern(x-side*6.8,3.4,z-2.4,.87);
     });
@@ -1268,8 +1296,9 @@
       const angle=fullTurn*(i+rand()*.7)/44,dist=14+rand()*15;
       lantern(Math.sin(angle)*dist,4+rand()*7,-Math.cos(angle)*dist,.55+rand()*1.12);
     }
-    lightArchitecture([stone,edge,bronze,plinth,linen,photoMat,pictureMetal,timber,blueTiles,
-      cedar,uprightCedar,railCap,plaster,darkTimber,mortar]);
+    const architectureMaterials=[stone,edge,bronze,plinth,linen,photoMat,pictureMetal,timber,blueTiles,
+      cedar,uprightCedar,walkwayTrim,railCap,plaster,darkTimber,mortar];
+    lightArchitecture(architectureMaterials);
     const lanternMeshes=pieces.map(([geometry,material])=>{
       const group=new T.InstancedMesh(geometry,material,lanterns.length);
       group.frustumCulled=false;scene.add(reflected(group));return group;
@@ -1493,6 +1522,32 @@
       renderer.setRenderTarget(target);
       renderer.render(screen,screenCamera);
     }
+    function toggleGI(){
+      const enabled=!giUniforms.riverGIEnabled.value;
+      if(enabled && !giEffect){
+        try{
+          const boxes=bounceBoxes.slice();
+          for(const {geometry,material,matrices} of batches.values()){
+            if(!architectureMaterials.includes(material) || geometry.type==='TorusGeometry')continue;
+            for(const matrix of matrices)boxes.push({material,matrix});
+          }
+          giEffect=riverGI.create(T,renderer,boxes,fixtures,giUniforms,screenMaterial,drawPass);
+        }catch(error){
+          console.warn('Ray-traced lighting is unavailable:',error);
+          giButton.hidden=true;
+          view.focus({preventScroll:true});
+          return;
+        }
+      }
+      giUniforms.riverGIEnabled.value=enabled;
+      giButton.setAttribute('aria-pressed',String(enabled));
+      giButton.textContent=enabled?'RTGI on':'RTGI off';
+      draw();
+    }
+    if(supportsGI){
+      giButton.hidden=false;
+      giButton.addEventListener('click',toggleGI);
+    }
     function drawWithBloom(){
       lightHeight.value=film.height;
       renderer.setRenderTarget(film);
@@ -1507,6 +1562,7 @@
       drawPass(combine,null);
     }
     function draw(){
+      if(giUniforms?.riverGIEnabled.value)giEffect.update(nightTime.value);
       sky.position.set(camera.position.x,0,camera.position.z);
       camera.updateMatrixWorld();
       camera.getWorldDirection(gaze);gaze.y=-gaze.y;
@@ -1588,8 +1644,10 @@
         beginFarewell();return;
       }
       guidePoints=[];
-      if(room)guidePoints.push([room.x,p.z]);
-      guidePoints.push(...route.filter(([,z])=>z<p.z-.12));
+      const center=room?[room.x,p.z]:riverWalk.bridgeCenter(p.x,p.z);
+      if(center)guidePoints.push(center);
+      const fromZ=center?.[1]??p.z;
+      guidePoints.push(...route.filter(([,z])=>z<fromZ-.02));
       if(p.z>ez-1.6)guidePoints.push([ex,ez-1.65]);
       if(!guidePoints.length)return;
       guideHeading=yaw;setGuide(0);
@@ -1730,6 +1788,7 @@
     canvas.addEventListener('lostpointercapture',()=>drag=null);
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();showFallback()});
     resize();updateLanterns(0);go(current,true);
+    ready=true;
     return {go,update,resize,step(action){
       if(arrival)return;
       setGuide(-1);move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
@@ -1748,8 +1807,11 @@
   function startFrames(){
     if(!frame && garden && dialog.open && !document.hidden && fallback.hidden)frame=requestAnimationFrame(animate);
   }
-  function showFallback(){
-    stopFrames();walkPanel.inert=false;fallback.hidden=false;movement.hidden=true;view.hidden=true;select(current);
+  function showFallback(error){
+    if(error)console.warn('The 3D memorial could not start:',error);
+    stopFrames();walkPanel.inert=false;fallback.hidden=false;movement.hidden=true;view.hidden=true;
+    if(giButton)giButton.hidden=true;
+    select(current);
   }
   function prepare(){
     if(preparing)return preparing;

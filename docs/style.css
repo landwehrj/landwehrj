@@ -112,4 +112,5 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 @media(max-width:650px){.garden-movement{flex-wrap:wrap}.garden-movement #garden-guide{margin:0}.garden-movement p{display:none}}
 
 .garden-audio{display:flex;gap:6px;justify-content:flex-end}
+#memorial #garden-gi[aria-pressed="true"]{border-color:#cdb582;background:#263b44}
 @media(max-width:650px){.garden-audio{flex-direction:column;gap:3px}.garden-audio button{min-height:32px;font-size:12px}.garden-top{align-items:flex-start}.garden-top h2{align-self:flex-start;padding-top:7px}}
