@@ -1,16 +1,32 @@
-:root{color-scheme:light;--ink:#273d30;--green:#314e3c;--muted:#566456;--line:#cfcebd;--paper:#f7f5ed;--serif:Georgia,"Times New Roman",serif}
+:root{
+  color-scheme:light;
+  --ink:#273d30;--muted:#566456;--line:#cfcebd;--paper:#f7f5ed;
+  --accent:#617851;--dedication:#4c584a;--paw:#526749;--date-rule:#89917c;--focus:#977236;
+  --button:#314e3c;--button-text:#fffdf3;--button-hover:#223a2c;
+  --print-border:#d2d0c3;--print:#fffef8;--print-shadow:#37332213;--photo-well:#e9e7da;
+  --serif:Georgia,"Times New Roman",serif;
+}
+@media(prefers-color-scheme:dark){
+  :root{
+    color-scheme:dark;
+    --ink:#ebeee4;--muted:#b0beb0;--line:#3d493f;--paper:#171e1a;
+    --accent:#abc398;--dedication:#c4cfc1;--paw:#a4b893;--date-rule:#839785;--focus:#d7b277;
+    --button:#b7cbb0;--button-text:#19271e;--button-hover:#ccddc6;
+    --print-border:#49564b;--print:#252f28;--print-shadow:#0005;--photo-well:#101612;
+  }
+}
 *{box-sizing:border-box}
 body{margin:0;color:var(--ink);background:var(--paper);font:16px/1.55 "DM Sans",system-ui,sans-serif}
 button,a{color:inherit;font:inherit}
 button{cursor:pointer}
 a{text-decoration:none}
 button{border:0;background:none}
-button:focus-visible,a:focus-visible{outline:3px solid #977236;outline-offset:5px}
+button:focus-visible,a:focus-visible{outline:3px solid var(--focus);outline-offset:5px}
 header{border-bottom:1px solid var(--line)}
 .navwrap,.hero,.album,footer{width:min(1280px,90%);margin:auto}
 .navwrap{height:72px;display:flex;align-items:center;justify-content:space-between}
 .wordmark{display:inline-flex;align-items:center;gap:14px;font:italic 25px var(--serif)}
-.paw{position:relative;display:inline-block;width:25px;height:26px;transform:rotate(-14deg);color:#526749}
+.paw{position:relative;display:inline-block;width:25px;height:26px;transform:rotate(-14deg);color:var(--paw)}
 .paw i,.paw b{position:absolute;display:block;background:currentColor}
 .paw b{width:16px;height:13px;left:5px;top:12px;border-radius:65% 65% 44% 44%}
 .paw i{width:5px;height:8px;border-radius:50%;left:1px;top:8px;transform:rotate(-20deg)}
@@ -21,13 +37,13 @@ nav :hover,.textbutton:hover{text-decoration:underline;text-underline-offset:4px
 .intro{padding:12px 0 22px;position:relative;z-index:1}
 .dates,footer span,.hint,.controls span{font:11px/1.5 "IBM Plex Mono",ui-monospace,monospace;letter-spacing:.065em}
 .dates{text-transform:uppercase;display:flex;gap:10px;align-items:center;color:var(--muted);margin:0 0 21px}
-.dates span{height:1px;width:28px;background:#89917c}
+.dates span{height:1px;width:28px;background:var(--date-rule)}
 h1,h2,h3,p,figure{margin:0}
 h1{font:normal clamp(54px,5.9vw,92px)/.96 var(--serif);letter-spacing:-.062em}
-h1 em{font-weight:normal;color:#617851}
-.dedication{font:normal clamp(18px,1.5vw,23px)/1.42 var(--serif);margin:24px 0 22px;color:#4c584a}
-.primary{display:inline-flex;align-items:center;gap:24px;padding:11px 20px;background:var(--green);color:#fffdf3;border-radius:5px;font-size:14px;font-weight:550}
-.primary:hover{background:#223a2c}
+h1 em{font-weight:normal;color:var(--accent)}
+.dedication{font:normal clamp(18px,1.5vw,23px)/1.42 var(--serif);margin:24px 0 22px;color:var(--dedication)}
+.primary{display:inline-flex;align-items:center;gap:24px;padding:11px 20px;background:var(--button);color:var(--button-text);border-radius:5px;font-size:14px;font-weight:550}
+.primary:hover{background:var(--button-hover)}
 .primary span,.textbutton span{font-size:1.18em}
 .vignette{min-width:0;position:relative}
 #stage{position:relative;width:100%;aspect-ratio:1.47;isolation:isolate;touch-action:pan-y}
@@ -45,7 +61,7 @@ h2{font:normal clamp(27px,2.8vw,40px)/1.15 var(--serif);letter-spacing:-.045em}
 .textbutton{font-size:13px;padding:7px 0;white-space:nowrap}.textbutton span{padding-left:6px}
 .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:24px;margin-top:23px}
 .card{text-align:left;min-width:0;padding:0}
-.print{padding:5px;border:1px solid #d2d0c3;background:#fffef8;box-shadow:0 3px 7px #37332213}
+.print{padding:5px;border:1px solid var(--print-border);background:var(--print);box-shadow:0 3px 7px var(--print-shadow)}
 .print img{display:block;width:100%;aspect-ratio:1.95;object-fit:cover}
 .card:first-child img{object-position:50% 38%}
 .card span{display:block;margin:12px 0 1px;font:normal 23px var(--serif);letter-spacing:-.03em}
@@ -59,7 +75,7 @@ body:has(dialog[open]){overflow:hidden}
 .dialoghead h2{font-size:28px}
 .close{font:30px/1 system-ui;width:38px;height:38px}
 #gallery{padding:14px 23px}
-figure img{display:block;width:100%;height:min(50dvh,480px);object-fit:contain;background:#e9e7da}
+figure img{display:block;width:100%;height:min(50dvh,480px);object-fit:contain;background:var(--photo-well)}
 figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 .controls{border-top:1px solid var(--line);padding:9px 0 0}
 .controls button{padding:8px 0;font-size:14px}
@@ -71,7 +87,7 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 @media(max-width:590px){.navwrap{height:57px}nav{gap:17px;font-size:13px}.wordmark{font-size:22px}.hero{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:28px 0 15px}.dates{margin-bottom:12px}h1{font-size:clamp(49px,11.5vw,67px);line-height:.96}h1 br:first-child{display:none}h1 br:first-child::after{content:" "}.dedication{margin:15px 0;font-size:17px}.primary{font-size:13px;padding:9px 14px}.vignette{margin:0 -3%}.hint{font-size:10px}.album{padding:21px 0 28px}.sectionhead h2{font-size:25px}.textbutton{font-size:12px}.cards{grid-template-columns:1fr;gap:22px;margin-top:16px}.print img{aspect-ratio:2}.card span{font-size:22px}.dialoghead{padding:10px 15px}#gallery{padding:12px}.spot{width:24px;height:24px}footer{font-size:16px}}
 
 /* Full-window garden; a photograph can open in the existing dialog above it. */
-#memorial{width:100vw;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;border-radius:0;overflow:hidden;background:#061022;color:#fff9e9}
+#memorial{color-scheme:dark;--focus:#977236;width:100vw;height:100dvh;max-width:none;max-height:none;margin:0;padding:0;border:0;border-radius:0;overflow:hidden;background:#061022;color:#fff9e9}
 .garden-view,.garden-fallback{position:absolute;inset:0}
 .garden-view:focus{outline:none}
 .garden-view canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}

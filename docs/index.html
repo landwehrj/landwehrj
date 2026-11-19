@@ -3,10 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#f7f4eb">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f7f5ed" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#171e1a" media="(prefers-color-scheme: dark)">
 <title>The Lead Programmer’s Chair</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=moving-shadows">
+<link rel="stylesheet" href="style.css?v=auto-appearance">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
 <script defer src="memorial.js"></script>
@@ -33,7 +35,7 @@
 </div>
 <div class="vignette">
 <div id="stage" role="group" aria-label="Interactive miniature of her desk, monitor, notebook, and chair">
-<img class="poster" src="desk-preview.webp" alt="A miniature wooden desk with a glowing monitor, an open notebook, and her calico figure asleep in the chair.">
+<img class="poster" src="desk-preview.webp?v=transparent" alt="A miniature wooden desk with a glowing monitor, an open notebook, and her calico figure asleep in the chair.">
 <button class="spot monitor" data-open="monitor" aria-label="Open monitor photo album" title="Monitor photos">+</button>
 <button class="spot notebook" data-open="poems" aria-label="Open notebook of poems" title="Notebook">+</button>
 <a class="spot chair" href="#memorial" data-enter-garden aria-label="Enter her lantern memorial" title="Enter her memorial">+</a>
