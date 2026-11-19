@@ -538,34 +538,48 @@
         }`
     });
     const portraits=[],glazedFrames=[];
-    // The shade is a closed paper envelope at the top and open at its bamboo hoop.
+    // Keep the woven paper density independent of the light transmitted through it.
     const lanterns=[], fixtures=[];
-    const paperMap=painted(256,(ctx,n)=>{
-      const gradient=ctx.createLinearGradient(0,0,0,n);
-      for(const [at,shade] of [[0,'#ad3513'],[.22,'#dd5718'],[.55,'#fd8d28'],[.84,'#ffc956'],[1,'#fff2ba']]){
-        gradient.addColorStop(at,shade);
-      }
-      ctx.fillStyle=gradient;ctx.fillRect(0,0,n,n);
-      for(let i=0;i<8;i++){
-        const x=i*n/8;
-        ctx.fillStyle='rgba(111,51,27,.32)';ctx.fillRect(x,0,1.35,n);
-        ctx.fillStyle='rgba(255,247,200,.14)';ctx.fillRect(x+1.35,0,.85,n);
+    const paperMap=painted(512,(ctx,n)=>{
+      const random=seedRandom();
+      ctx.fillStyle='#dedede';ctx.fillRect(0,0,n,n);
+      for(let j=0;j<180;j++){
+        const x=random()*n,y=random()*n,r=7+random()*37;
+        const pulp=ctx.createRadialGradient(x,y,0,x,y,r);
+        pulp.addColorStop(0,j%3?'#57575714':'#ffffff39');
+        pulp.addColorStop(1,'#80808000');
+        ctx.fillStyle=pulp;ctx.fillRect(x-r,y-r,2*r,2*r);
       }
       for(let j=0;j<2200;j++){
-        const x=rand()*n,y=rand()*n,length=1+rand()*8;
-        ctx.strokeStyle=j%3?'#7e462825':'#fff7ce33';ctx.lineWidth=.48;
-        ctx.beginPath();ctx.moveTo(x,y);ctx.quadraticCurveTo(x+length*.46,y-1.1,x+length,y+.65);ctx.stroke();
+        const x=rand()*n,y=rand()*n,length=3+rand()*23,drift=(random()-.5)*3;
+        ctx.strokeStyle=j%4?'#63564760':'#ffffff6f';
+        ctx.lineWidth=.36+random()*.89;
+        ctx.beginPath();
+        ctx.moveTo(x,y);ctx.quadraticCurveTo(x+length*.44,y+drift-1.1,x+length,y+drift);
+        ctx.stroke();
       }
-      for(const y of [.13,.84,.96]){ctx.fillStyle='#8e522b35';ctx.fillRect(0,y*n,n,1.8)}
     });
+    paperMap.wrapS=T.RepeatWrapping;
+    paperMap.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
     const shadeProfile=new T.SplineCurve([
-      [.155,0],[.168,.032],[.233,.117],[.276,.27],[.274,.45],
-      [.255,.56],[.218,.635],[.148,.673],[.001,.679]
+      [.157,0],[.185,.033],[.233,.122],[.262,.246],[.266,.397],
+      [.251,.520],[.209,.609],[.146,.660],[.105,.671],[.001,.676]
     ].map(([r,y])=>new T.Vector2(r,y)));
-    const shadeGeometry=new T.LatheGeometry(shadeProfile.getPoints(24),30);
-    const hoopGeometry=new T.TorusGeometry(.158,.009,8,22);
+    const shadeGeometry=new T.LatheGeometry(shadeProfile.getPoints(36),36);
+    const hoopGeometry=new T.TorusGeometry(.158,.012,10,32);
     hoopGeometry.rotateX(Math.PI/2);
-    const braceGeometry=new T.BoxGeometry(.308,.009,.012);
+    const braceGeometry=new T.BoxGeometry(.308,.009,.011);
+    const topHem=new T.TorusGeometry(.105,.009,8,28);
+    topHem.rotateX(Math.PI/2).translate(0,.672,0);
+    const lanternIron=new T.MeshStandardMaterial({color:color('#534437'),roughness:.53,metalness:.58});
+    const hangerPlate=new T.BoxGeometry(.094,.018,.071);
+    const hangerHook=new T.TubeGeometry(new T.CatmullRomCurve3([
+      [0,.003],[0,-.022],[-.023,-.046],[-.021,-.073],
+      [0,-.085],[.023,-.073],[.027,-.051],[.018,-.041]
+    ].map(([x,y])=>new T.Vector3(x,y,0))),20,.0065,8,false);
+    const hangerEye=new T.TorusGeometry(.021,.0045,8,16);
+    hangerEye.rotateY(Math.PI/2);
+    const eyeDrop=.094,rodDrop=eyeDrop+.020;
     const flameGeometry=new T.PlaneGeometry(.142,.224);
     function candlePaper(material){
       material.onBeforeCompile=shader=>{
@@ -581,22 +595,32 @@
         );
         shader.fragmentShader='varying vec3 paperNormal,paperView;\n'+shader.fragmentShader.replace(
           '#include <color_fragment>',
-          `#include <color_fragment>
+          `float paperDensity=diffuseColor.g;
+           #include <color_fragment>
            float face=abs(dot(normalize(paperNormal),normalize(paperView)));
-           float transmission=smoothstep(.08,.91,face);
-           float flame=exp(-pow((vUv.y-.20)*6.0,2.));
-           float ribs=1.-.18*pow(.5+.5*cos(vUv.x*50.26548),16.);
-           float paperDensity=smoothstep(.12,.88,diffuseColor.g);
-           diffuseColor.rgb*=mix(vec3(.66,.48,.31),vec3(1.31,1.12,.88),transmission);
-           diffuseColor.rgb+=vec3(.99,.71,.33)*flame*transmission*mix(.66,1.,paperDensity);
-           diffuseColor.rgb*=ribs;
+           float height=vUv.y;
+           float transmission=smoothstep(.04,.96,face);
+           float core=exp(-pow((height-.40)*4.5,2.));
+           float hem=smoothstep(.01,.14,height)*(1.-smoothstep(.79,.995,height));
+           float fibers=clamp((paperDensity-.62)*1.17+.95,.64,1.16);
+           vec3 tint=mix(vec3(1.),diffuseColor.rgb/max(paperDensity,.01),.20);
+           float ribCenter=vUv.x*50.26548+.052*sin(height*7.5+vUv.x*12.56637);
+           float ribs=pow(.5+.5*cos(ribCenter),26.);
+           float shoulder=smoothstep(.52,.98,height);
+           vec3 amber=mix(vec3(.78,.33,.085),vec3(.63,.19,.041),shoulder);
+           amber=mix(vec3(.47,.132,.028),amber,hem);
+           vec3 radiance=amber*(.73+.25*transmission)
+             +vec3(.43,.52,.31)*core*(.17+.83*pow(transmission,1.35))*hem;
+           diffuseColor.rgb=radiance*tint*fibers*mix(1.,.42,ribs);
            diffuseColor.a=.04;`
         );
       };
       return material;
     }
     const paper=candlePaper(new T.MeshBasicMaterial({map:paperMap,side:T.DoubleSide,toneMapped:false}));
-    const bamboo=new T.MeshBasicMaterial({color:color('#34241a')});
+    const bamboo=new T.MeshStandardMaterial({
+      color:color('#37291e'),roughness:.74,emissive:color('#754019'),emissiveIntensity:.51
+    });
     const flameMaterial=new T.ShaderMaterial({
       transparent:true,depthWrite:false,blending:T.AdditiveBlending,toneMapped:false,
       vertexShader:`varying vec2 flameUV;
@@ -619,7 +643,7 @@
         }`
     });
     const lanternGlow=softGlow(new T.SpriteMaterial({
-      map:glowMap,transparent:true,opacity:.36,depthWrite:false,toneMapped:false,blending:T.AdditiveBlending
+      map:glowMap,transparent:true,opacity:.27,depthWrite:false,toneMapped:false,blending:T.AdditiveBlending
     }));
     const pieces=[
       [shadeGeometry,paper],[hoopGeometry,bamboo],[braceGeometry,bamboo],
@@ -631,37 +655,73 @@
       const lamp={x,y,z,size,phase:rand()*fullTurn,glow,fixture,canopy,mountHeight};
       lanterns.push(lamp);
       if(fixture)fixtures.push(lamp);
+      if(mountHeight){
+        batch(hangerPlate,lanternIron,x,mountHeight,z,1,1,1);
+        batch(hangerHook,lanternIron,x,mountHeight,z,1,1,1);
+        batch(hangerEye,lanternIron,x,mountHeight-eyeDrop,z,1,1,1);
+        for(const dx of [-.032,.032]){
+          batch(pegGeometry,lanternIron,x+dx,mountHeight-.010,z,.015,.005,.015);
+        }
+      }
       return lamp;
     }
     function shadowVariant(mode=shadowValues?.riverShadowMode.value ?? 0){
       return mode===0?'off':'map';
     }
     function finishJoinery(shader,finish){
-      const axes=finish.horizontal?'xzy':'xyz';
-      const varyings='varying vec4 railPosition;\nvarying vec3 railNormal;\n';
+      const axes=finish.axes || (finish.horizontal?'xzy':'xyz');
+      const varyings='varying vec4 railPosition;\nvarying vec3 railNormal;\n'
+        +(finish.timber?'varying float timberSeed;\n':'')
+        +(finish.curved?'varying vec2 curvedGrain;\n':'');
       shader.uniforms.railFinishMap={value:finish.map};
+      if(finish.timber)shader.uniforms.weatheredTimber={value:finish.timber};
       shader.vertexShader=varyings+shader.vertexShader.replace('#include <begin_vertex>',`
         #include <begin_vertex>
         vec3 railScale=vec3(1.0);
         #ifdef USE_INSTANCING
           railScale=vec3(length(instanceMatrix[0].xyz),length(instanceMatrix[1].xyz),length(instanceMatrix[2].xyz));
         #endif
-        railPosition=vec4((position*railScale).${axes},railScale.z*.5);
+        railPosition=vec4((position*railScale).${axes},railScale.${axes[1]}*.5);
         railNormal=normal.${axes};
+        ${finish.curved?'curvedGrain=uv;':''}
+        ${finish.timber?`
+        vec3 timberOrigin=modelMatrix[3].xyz;
+        #ifdef USE_INSTANCING
+          timberOrigin+=instanceMatrix[3].xyz;
+        #endif
+        timberSeed=fract(sin(dot(timberOrigin,vec3(13.1,37.4,57.7)))*43758.5453);`:''}
       `);
-      shader.fragmentShader=varyings+'uniform sampler2D railFinishMap;\n'+shader.fragmentShader
+      shader.fragmentShader=varyings+'uniform sampler2D railFinishMap;\n'
+        +(finish.timber?'uniform sampler2D weatheredTimber;\n':'')+shader.fragmentShader
         .replace('#include <color_fragment>',`
           #include <color_fragment>
           vec3 railAxis=abs(normalize(railNormal));
           vec3 railBlend=pow(railAxis,vec3(8.));
           railBlend/=dot(railBlend,vec3(1.));
           vec3 railUV=railPosition.xyz*${finish.scale};
-          vec3 finishGrain=texture2D(railFinishMap,railUV.zy).rgb*railBlend.x
+          vec3 finishGrain=${finish.curved?'texture2D(railFinishMap,curvedGrain).rgb':`
+                          texture2D(railFinishMap,railUV.zy).rgb*railBlend.x
                           +texture2D(railFinishMap,railUV.xz).rgb*railBlend.y
-                          +texture2D(railFinishMap,railUV.xy).rgb*railBlend.z;
-          float bevelWear=smoothstep(.05,.24,1.-max(railAxis.x,max(railAxis.y,railAxis.z)));
+                          +texture2D(railFinishMap,railUV.xy).rgb*railBlend.z`};
+          float bevelWear=${finish.curved?'smoothstep(.18,.47,railAxis.z)*(1.-smoothstep(.74,.94,railAxis.z))'
+                                           :'smoothstep(.05,.24,1.-max(railAxis.x,max(railAxis.y,railAxis.z)))'};
           bevelWear*=mix(.48,1.,smoothstep(.33,.73,finishGrain.g));
           diffuseColor.rgb*=mix(.65,1.28,finishGrain.b)*(1.+bevelWear*${finish.wear});
+          ${finish.timber?`
+          vec3 woodRun=railUV+timberSeed*vec3(.73,.98,.49);
+          vec3 weathered=${finish.curved?'texture2D(weatheredTimber,curvedGrain+timberSeed*vec2(.47,.36)).rgb':`
+                        texture2D(weatheredTimber,woodRun.zy).rgb*railBlend.x
+                        +texture2D(weatheredTimber,woodRun.xz).rgb*railBlend.y
+                        +texture2D(weatheredTimber,woodRun.xy).rgb*railBlend.z`};
+          float timberGrain=dot(weathered,vec3(.29,.58,.13));
+          float seat=${finish.curved?'0.':'1.-smoothstep(.014,.078,railPosition.w-abs(railPosition.y))'};
+          vec3 timberTint=mix(vec3(.55),sRGBToLinear(vec4(weathered,1.)).rgb*3.65,.77);
+          diffuseColor.rgb*=timberTint*mix(1.,.61,seat)
+                            *mix(vec3(1.),vec3(1.10,1.075,1.00),bevelWear);
+          ${finish.base?`
+          float foot=1.-smoothstep(.022,.14,railPosition.y+railPosition.w+.060*(timberGrain-.5));
+          diffuseColor.rgb*=mix(vec3(1.),vec3(.43,.47,.51),foot*.63);`:''}
+          `:''}
           ${finish.patina?`
           float oxidation=(1.-bevelWear)*smoothstep(.43,.64,finishGrain.r)*.64;
           diffuseColor.rgb*=mix(vec3(1.),vec3(.43,.32,.25),oxidation);
@@ -675,6 +735,7 @@
         .replace('#include <roughnessmap_fragment>',`
           #include <roughnessmap_fragment>
           roughnessFactor=clamp(roughnessFactor+(finishGrain.g-.5)*.34-bevelWear*.12,.27,.89);
+          ${finish.timber?'roughnessFactor=clamp(roughnessFactor+.31*(.53-timberGrain)+.081*seat,.44,.94);':''}
           ${finish.groundContact?'roughnessFactor+=.065*postGround;':''}
         `)
         .replace('#include <normal_fragment_maps>',`
@@ -682,8 +743,10 @@
           vec3 railDx=dFdx(-vViewPosition),railDy=dFdy(-vViewPosition);
           vec3 railTx=cross(railDy,normal),railTy=cross(normal,railDx);
           float railDet=dot(railDx,railTx);
-          float railRelief=finishGrain.r*${finish.relief};
+          float railRelief=finishGrain.r*${finish.relief}${finish.timber?
+            (finish.curved?'+.0012*timberGrain':'+.0022*timberGrain'):''};
           vec3 railSlope=sign(railDet)*(railTx*dFdx(railRelief)+railTy*dFdy(railRelief));
+          ${finish.timber?`railSlope*=min(1.,${finish.curved?'.30':'.47'}*abs(railDet)/max(length(railSlope),1e-7));`:''}
           normal=normalize(max(abs(railDet),1e-7)*normal-railSlope);
         `);
     }
@@ -717,13 +780,14 @@
       const roomBounds=rooms.map(({x,z,width,depth})=>new T.Vector4(x,z,width/2,depth/2));
       for(const material of materials){
         const isStone=material.map===limestone;
-        const isCap=material===edge;
+        const isGateCap=material===gateLedge;
+        const isCap=material===edge || isGateCap;
         const isPrint=material===photoMat,isMat=material===linen,isDeck=material===timber;
         const isFrame=material===frameOak;
         const grainFinish=joineryFinishes.get(material);
         const isDeckTrim=material===headerPlank || material===walkwayTrim;
-        const exterior=isStone || isDeck || isDeckTrim || (grainFinish && material!==uprightCedar);
-        const profile=isStone?'stone':isPrint?'print':isMat?'mat':isFrame?'frame':isDeck?'deck':isDeckTrim?'deck-trim':'lanterns';
+        const exterior=isStone || isDeck || isDeckTrim || (grainFinish && !grainFinish.timber && material!==uprightCedar);
+        const profile=isGateCap?'slate-ledge':isStone?'stone':isPrint?'print':isMat?'mat':isFrame?'frame':isDeck?'deck':isDeckTrim?'deck-trim':'lanterns';
         material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant()+(movingEnabled?'-moving':'')
           +(grainFinish?'-joinery-'+material.id:exterior?'-exterior':'');
         material.onBeforeCompile=shader=>{
@@ -981,7 +1045,8 @@
               float worn=smoothstep(.12,.69,stoneAxis.y)*(1.-smoothstep(.94,.999,stoneAxis.y));
               float mottle=${photoMaterials.slate?'smoothstep(.16,.70,pores.b)':'smoothstep(.33,.77,grain.g)'};
               float atStoneFoot=1.-smoothstep(.008,.14,abs(riverSurface.y));
-              diffuseColor.rgb*=mapTexelToLinear(grain).rgb*mix(vec3(.72,.78,.86),vec3(1.32,1.33,1.36),mottle)
+              diffuseColor.rgb*=mapTexelToLinear(grain).rgb*mix(vec3(${isGateCap?'.57,.62,.67':'.72,.78,.86'}),
+                               vec3(${isGateCap?'1.44,1.46,1.49':'1.32,1.33,1.36'}),mottle)
                                *(1.+worn*riverEdgeWear)*(1.-.19*atStoneFoot);
             `).replace('#include <roughnessmap_fragment>',`
               #include <roughnessmap_fragment>
@@ -992,7 +1057,7 @@
               vec3 stoneDx=dFdx(-vViewPosition),stoneDy=dFdy(-vViewPosition);
               vec3 stoneTx=cross(stoneDy,normal),stoneTy=cross(normal,stoneDx);
               float stoneDet=dot(stoneDx,stoneTx);
-              float stoneHeight=.0023*grain.g+${photoMaterials.slate?'.0068':'.00078'}*pores.r;
+              float stoneHeight=.0023*grain.g+${photoMaterials.slate?(isGateCap?'.009':'.0068'):'.00078'}*pores.r;
               vec3 microRelief=sign(stoneDet)*(stoneTx*dFdx(stoneHeight)+stoneTy*dFdy(stoneHeight));
               normal=normalize(max(abs(stoneDet),1e-7)*normal-microRelief);
             `);
@@ -1287,7 +1352,14 @@
     const cedar=new T.MeshStandardMaterial({
       map:cedarMap,bumpMap:cedarMap,bumpScale:.011,roughnessMap:cedarFinish,roughness:.83,color:color('#b58d72')
     });
-    const uprightCedar=new T.MeshStandardMaterial({color:color('#795f52'),roughness:.72});
+    const uprightCedar=new T.MeshStandardMaterial({color:color('#876f5f'),roughness:.72});
+    const crossTimber=new T.MeshStandardMaterial({color:color('#8a7362'),roughness:.73});
+    const rafterTimber=new T.MeshStandardMaterial({color:color('#836c5e'),roughness:.76});
+    const slatWood=new T.MeshStandardMaterial({color:color('#856d5c'),roughness:.77});
+    const gateWood=new T.MeshStandardMaterial({color:color('#776453'),roughness:.72,vertexColors:true});
+    const timberSocket=new T.MeshStandardMaterial({color:color('#33251e'),roughness:.94});
+    const ironPeg=new T.MeshStandardMaterial({color:color('#59514a'),roughness:.54,metalness:.69});
+    const postBand=new T.MeshStandardMaterial({color:color('#8d7759'),roughness:.54,metalness:.58});
     const railWood=new T.MeshStandardMaterial({color:color('#805743'),roughness:.54});
     const plinth=new T.MeshStandardMaterial({color:color('#35434f'),roughness:.69,vertexColors:true});
     const railCap=new T.MeshStandardMaterial({color:color('#a88b63'),roughness:.40,metalness:1});
@@ -1334,13 +1406,24 @@
       texture.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
       texture.needsUpdate=true;
     }
+    const timberPaint=photoMaterials.pavilionTimber;
+    if(timberPaint){
+      timberPaint.wrapS=timberPaint.wrapT=T.MirroredRepeatWrapping;
+      timberPaint.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+    }
     const walkwayTrim=timber.clone();
     walkwayTrim.color.copy(color('#afaaa1'));
     const headerPlank=timber.clone();
     headerPlank.color.copy(color('#b3aea5'));
+    const exteriorTimber={map:railGrain,timber:timberPaint,scale:'vec3(2.24,.78,2.24)',wear:'.11',relief:'.00118'};
     const joineryFinishes=new Map([
-      [uprightCedar,{map:railGrain,scale:'vec3(1.85,.59,1.85)',wear:'.09',relief:'.00082'}],
+      [uprightCedar,{...exteriorTimber,base:true}],
+      [crossTimber,{...exteriorTimber,axes:'xzy'}],
+      [rafterTimber,{...exteriorTimber,axes:'yxz'}],
+      [slatWood,exteriorTimber],
+      [gateWood,{...exteriorTimber,curved:true,wear:'.16',relief:'.00110'}],
       [pictureBrass,{map:castFinish,scale:'vec3(5.3)',wear:'.24',relief:'.00058',patina:true}],
+      [postBand,{map:castFinish,scale:'vec3(4.6)',wear:'.15',relief:'.00048',patina:true}],
       [railWood,{map:railGrain,horizontal:true,scale:'vec3(3.7,.65,3.7)',wear:'.18',relief:'.00094'}],
       [plinth,{map:railGrain,scale:'vec3(4.2,1.05,4.2)',wear:'.25',relief:'.00120',groundContact:true}],
       [railCap,{map:castFinish,scale:'vec3(4.6)',wear:'.32',relief:'.00062',patina:true}],
@@ -1363,13 +1446,19 @@
     const beam=chamferedBlock(.063), trim=chamferedBlock(.035);
     // Mill the long edges while leaving full-width end faces for the joints.
     const timberSection=new T.Shape();
-    timberSection.moveTo(-.5,-.452);
-    for(const [x,y] of [[-.452,-.5],[.452,-.5],[.5,-.452],[.5,.452],
-      [.452,.5],[-.452,.5],[-.5,.452]])timberSection.lineTo(x,y);
+    timberSection.moveTo(-.5,-.424);
+    for(const [x,y] of [[-.478,-.478],[-.424,-.5],[.424,-.5],[.478,-.478],[.5,-.424],[.5,.424],
+      [.478,.478],[.424,.5],[-.424,.5],[-.478,.478],[-.5,.424]])timberSection.lineTo(x,y);
     timberSection.closePath();
     const ceilingTimber=new T.ExtrudeGeometry(timberSection,{depth:1,bevelEnabled:false});
     ceilingTimber.translate(0,0,-.5);
     const braceTimber=ceilingTimber.clone().rotateY(Math.PI/2);
+    const latticeTimber=ceilingTimber.clone().rotateX(Math.PI/2);
+    const pegGeometry=new T.CylinderGeometry(.46,.50,1,12);
+    function carpenterPeg(x,y,z,side,diameter){
+      batch(pegGeometry,timberSocket,x,y,z+side*.001,diameter*1.48,.007,diameter*1.48,Math.PI/2,Math.PI/2);
+      batch(pegGeometry,ironPeg,x,y,z+side*.005,diameter,.009,diameter,Math.PI/2,Math.PI/2);
+    }
     const handrailSection=new T.Shape();
     const corner=.15,flat=.5-corner;
     handrailSection.moveTo(-flat,-.5);
@@ -1417,6 +1506,10 @@
     }
     const wallBlock=roundedStone(.009,.019,.028);
     const wallCap=roundedStone(.013,.15,.032);
+    const gateCap=roundedStone(.020,.19,.056);
+    const gateLedge=edge.clone();
+    gateLedge.color.copy(color('#858b8d'));
+    gateLedge.roughness=.78;
     const capBlock=roundedStone(.032,.15,.032);
     const railingBlock=chamferedBlock(.069);
     const plaster=new T.MeshStandardMaterial({map:limestone,color:color('#65717e'),roughness:.80});
@@ -1444,11 +1537,11 @@
       batch(capBlock,edge,x,(wallCapBase+wallCapTop)/2,z,pierCapWidth,wallCapTop-wallCapBase,pierCapWidth);
       blockWalking(x,z,pierCapWidth,pierCapWidth);
       batch(beam,uprightCedar,x,(height+wallCapTop)/2,z,width,height-wallCapTop,depth);
-      batch(trim,bronze,x,wallCapTop+.025,z,width+.05,.050,depth+.05);
+      batch(trim,postBand,x,wallCapTop+.025,z,width+.05,.050,depth+.05);
       batch(poolGeo,contact,x,.008,z,pierWidth+.26,1,pierWidth+.26);
       batch(poolGeo,postContact,x,.829,z,width+.10,1,depth+.10);
     }
-    function stoneWall(alongX,fixed,firstPier,lastPier){
+    function stoneWall(alongX,fixed,firstPier,lastPier,capFinish=edge){
       const bodyInset=pierWidth/2+wallJoint,capInset=pierCapWidth/2+wallJoint;
       const from=firstPier+bodyInset,to=lastPier-bodyInset;
       const capFrom=firstPier+capInset,capTo=lastPier-capInset;
@@ -1469,8 +1562,78 @@
         const start=low+(i===0?0:.004),finish=high-(i===spans-1?0:.004);
         slab(wallBlock,stone,start,finish,wallBandBase/2,wallBandBase,.30);
         slab(wallBlock,plaster,start,finish,(wallBandBase+wallCapBase)/2,wallCapBase-wallBandBase,.31);
-        slab(wallCap,edge,i===0?capFrom:start,i===spans-1?capTo:finish,
+        slab(capFinish===gateLedge?gateCap:wallCap,capFinish,i===0?capFrom:start,i===spans-1?capTo:finish,
           (wallCapBase+wallCapTop)/2,wallCapTop-wallCapBase,.394);
+      }
+    }
+    const gateInner=.851,gateOuter=.986,gateCenterY=2.017;
+    function moonGateGeometry(){
+      const profile=[
+        [gateInner,-.043],[gateInner+.014,-.060],[gateInner+.025,-.067],
+        [gateOuter-.020,-.067],[gateOuter,-.046],[gateOuter,.046],
+        [gateOuter-.020,.067],[gateInner+.025,.067],[gateInner+.014,.060],[gateInner,.043]
+      ];
+      const positions=[],normals=[],uvs=[],colors=[];
+      const steps=20,seamWidth=.0021,quarter=fullTurn/4;
+      for(let piece=0;piece<4;piece++){
+        const start=piece*quarter+seamWidth,end=start+quarter-2*seamWidth;
+        const angles=[start,start+.023];
+        for(let i=1;i<steps;i++)angles.push(T.MathUtils.lerp(start,end,i/steps));
+        angles.push(end-.023,end);
+        const vertex=(radius,depth,a,radial,forward)=>{
+          const x=Math.cos(a),y=Math.sin(a);
+          const shading=.72+.28*T.MathUtils.smoothstep(Math.min(a-start,end-a),0,.025);
+          positions.push(radius*x,radius*y,depth);
+          normals.push(radial*x,radial*y,forward);
+          uvs.push((radius-gateInner+depth*.46)*3.2+piece*.31,a*.87+piece*.39);
+          colors.push(shading,shading,shading);
+        };
+        for(let i=0;i<profile.length;i++){
+          const [r0,z0]=profile[i],[r1,z1]=profile[(i+1)%profile.length];
+          const dr=r1-r0,dz=z1-z0,d=Math.hypot(dr,dz);
+          for(let j=1;j<angles.length;j++){
+            const a=angles[j-1],b=angles[j];
+            for(const [radius,depth,angle] of [[r0,z0,a],[r0,z0,b],[r1,z1,b],[r0,z0,a],[r1,z1,b],[r1,z1,a]]){
+              vertex(radius,depth,angle,dz/d,-dr/d);
+            }
+          }
+        }
+        for(const [angle,direction] of [[start,-1],[end,1]]){
+          const cap=(radius,depth)=>{
+            positions.push(radius*Math.cos(angle),radius*Math.sin(angle),depth);
+            normals.push(-direction*Math.sin(angle),direction*Math.cos(angle),0);
+            uvs.push(radius*2.3,depth*3.0);
+            colors.push(.47,.47,.47);
+          };
+          for(let edgeIndex=0;edgeIndex<profile.length;edgeIndex++){
+            const next=(edgeIndex+1)%profile.length;
+            cap((gateInner+gateOuter)/2,0);
+            cap(...profile[direction<0?edgeIndex:next]);
+            cap(...profile[direction<0?next:edgeIndex]);
+          }
+        }
+      }
+      const geometry=new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute(positions,3));
+      geometry.setAttribute('normal',new T.Float32BufferAttribute(normals,3));
+      geometry.setAttribute('uv',new T.Float32BufferAttribute(uvs,2));
+      geometry.setAttribute('color',new T.Float32BufferAttribute(colors,3));
+      return geometry;
+    }
+    function addMoonGate(x,z,ring,dowel){
+      batch(ring,gateWood,x,gateCenterY,z,1,1,1);
+      const bottom=wallCapTop-.013,top=gateCenterY-gateInner+.069;
+      batch(beam,uprightCedar,x,(top+bottom)/2,z,.129,top-bottom,.158);
+      batch(poolGeo,postContact,x,wallCapTop+.002,z,.27,1,.30);
+      for(const side of [-1,1])carpenterPeg(x,gateCenterY-gateOuter+.071,z+side*.079,side,.020);
+      const barDrop=.310,seat=gateInner+.028;
+      const barWidth=2*Math.sqrt(seat*seat-barDrop*barDrop);
+      batch(dowel,slatWood,x,gateCenterY-barDrop,z,.047,barWidth,.047,0,Math.PI/2);
+      const segments=24,radius=(gateInner+gateOuter)/2;
+      for(let i=0;i<segments;i++){
+        const angle=fullTurn*(i+.5)/segments;
+        bounceBox(gateWood,x+radius*Math.cos(angle),gateCenterY+radius*Math.sin(angle),z,
+          radius*fullTurn/segments+.005,.133,.128,0,angle+Math.PI/2);
       }
     }
     const profiles=[
@@ -1514,7 +1677,7 @@
         band.frustumCulled=false;
         scene.add(reflected(band));
       }
-      roofBand(cedar,.158,-.024,.126,rafterRows);
+      roofBand(rafterTimber,.158,-.024,.126,rafterRows);
       roofBand(darkTimber,.276,.078,.126,fasciaRows);
       for(let i=1;i<profile.length;i++){
         const [u0,y0]=profile[i-1],[u1,y1]=profile[i];
@@ -1524,7 +1687,7 @@
         bounceBox(roof,midX,midY+.05,z,length,.14,span,0,pitch);
         // Use matching pitch-aligned bounds for the cached shadow bake.
         for(const row of fasciaRows)bounceBox(darkTimber,midX,midY+.017,row,length,.198,.142,0,pitch);
-        for(const row of rafterRows)bounceBox(cedar,midX,midY-.093,row,length,.182,.142,0,pitch);
+        for(const row of rafterRows)bounceBox(rafterTimber,midX,midY-.093,row,length,.182,.142,0,pitch);
       }
       for(const side of [-1,1]){
         const y=profile[side===1?profile.length-1:0][1];
@@ -1594,6 +1757,7 @@
       const wallReach=w/2-pavilionInset,entryReach=d/2-pavilionInset;
       const headerBottom=h-.102,headerHeight=.265,headerDepth=.33;
       const headerCenter=headerBottom+headerHeight/2;
+      const hasEntryLattice=r===1 || r===3;
       const roof=r===1 || r===3?cedar:blueTiles;
       galleryRoof(room,h,profiles[r],roof,[.42,.64,.63,.32,.53][r]);
       deck(x,z,w,d,.218,true);
@@ -1603,7 +1767,7 @@
         batch(trim,darkTimber,rimX,-.115,z,.17,.22,d-.04);
         for(const dz of [-d/2+.58,0,d/2-.58])deckPile(x+side*(w/2-.31),z+dz);
         batch(poolGeo,contact,wallX-side*.17,.007,z,.44,1,entryReach*2);
-        batch(ceilingTimber,darkTimber,wallX,headerCenter,z,.28,headerHeight,entryReach*2-headerDepth);
+        batch(ceilingTimber,crossTimber,wallX,headerCenter,z,.28,headerHeight,entryReach*2-headerDepth);
         const uprights=r===2?[-entryReach,-d/4,d/4,entryReach]:[-entryReach,0,entryReach];
         for(let i=1;i<uprights.length;i++){
           const from=z+uprights[i-1],to=z+uprights[i];
@@ -1617,39 +1781,54 @@
           const wing=wallReach-1.65;
           const wingX=x+side*(1.65+wing/2);
           const post=x+side*1.65;
-          stoneWall(true,z+dz,Math.min(post,wallX),Math.max(post,wallX));
+          stoneWall(true,z+dz,Math.min(post,wallX),Math.max(post,wallX),r===4 && dz<0?gateLedge:edge);
           galleryPost(post,z+dz,.25,.27,h);
-          batch(trim,bronze,post,h-.30,z+dz,.30,.078,.31);
+          batch(trim,postBand,post,h-.30,z+dz,.30,.078,.31);
           batch(poolGeo,contact,wingX,.008,z+dz-Math.sign(dz)*.141,wing,1,.42);
           // Extend both ends past the bearing faces so they seat in the post and header.
+          const behindLattice=hasEntryLattice && dz>0;
+          const braceZ=z+dz+(behindLattice?.070:0),braceDepth=behindLattice?.124:.166;
           const rise=.58,run=.51;
-          batch(braceTimber,cedar,post+side*(.045+run/2),headerBottom+.07-rise/2,z+dz,
-            Math.hypot(run,rise),.122,.166,0,side*Math.atan2(rise,run));
+          const braceStartX=post+side*.045,braceStartY=headerBottom+.07-rise;
+          batch(braceTimber,rafterTimber,braceStartX+side*run/2,braceStartY+rise/2,braceZ,
+            Math.hypot(run,rise),.122,braceDepth,0,side*Math.atan2(rise,run));
+          const front=Math.sign(dz);
+          for(const face of [front,-front]){
+            const braceFace=braceZ+face*braceDepth/2;
+            for(const t of [.24,.77])carpenterPeg(braceStartX+side*t*run,braceStartY+t*rise,braceFace,face,.023);
+            const headerFace=z+dz+face*headerDepth/2;
+            for(const junction of [post,wallX]){
+              carpenterPeg(junction,headerCenter+.047,headerFace,face,.030);
+              carpenterPeg(junction,headerCenter-.046,headerFace,face,.030);
+            }
+          }
         }
       }
       for(const dz of [-entryReach,entryReach]){
-        batch(ceilingTimber,cedar,x,headerCenter,z+dz,headerDepth,headerHeight,wallReach*2+.28,Math.PI/2);
-        lantern(x-1.22,h-.85,z+dz,.67,true,h+.48,headerBottom+.014);
-        lantern(x+1.22,h-.85,z+dz,.67,true,h+.48,headerBottom+.014);
+        batch(ceilingTimber,crossTimber,x,headerCenter,z+dz,headerDepth,headerHeight,wallReach*2+.28,Math.PI/2);
+        lantern(x-1.22,h-.85,z+dz,.67,true,h+.48,headerBottom);
+        lantern(x+1.22,h-.85,z+dz,.67,true,h+.48,headerBottom);
       }
       if(r===4){
-        const windowRing=new T.TorusGeometry(.81,.065,8,44);
+        const ring=moonGateGeometry(),dowel=new T.CylinderGeometry(.5,.5,1,16);
         for(const side of [-1,1]){
-          const wx=x+side*(wallReach+1.65)/2,wz=z-entryReach;
-          batch(windowRing,cedar,wx,1.86,wz,1,1,1);
-          batch(cube,cedar,wx,1.02,wz,.10,.30,.11);
-          batch(cube,bronze,wx,1.58,wz,1.48,.026,.05);
+          addMoonGate(x+side*(wallReach+1.65)/2,z-entryReach,ring,dowel);
         }
-      }else if(r===1 || r===3){
+      }else if(hasEntryLattice){
         for(const side of [-1,1]){
-          const wz=z+entryReach-.12,wing=wallReach-1.65;
+          const wz=z+entryReach-.046,wing=wallReach-1.65;
           const count=r===1?7:4;
           const sill=r===1?h-.76:1.75;
-          const slatHigh=headerBottom+.045,slatLow=sill+.012;
+          const slatHigh=headerBottom+.037,slatLow=sill+.043;
           for(let i=1;i<=count;i++)
-            batch(cube,cedar,x+side*(1.65+i*wing/(count+1)),
-              (slatHigh+slatLow)/2,wz,.052,slatHigh-slatLow,.064);
-          batch(ceilingTimber,cedar,x+side*(1.65+wing/2),sill,wz,.072,.065,wing,Math.PI/2);
+            batch(latticeTimber,slatWood,x+side*(1.65+i*wing/(count+1)),
+              (slatHigh+slatLow)/2,wz,.056,slatHigh-slatLow,.070);
+          const sillStart=1.65+.095,sillEnd=wallReach-.115;
+          batch(ceilingTimber,crossTimber,x+side*(sillStart+sillEnd)/2,sill,wz,.105,.119,sillEnd-sillStart,Math.PI/2);
+          for(const at of [sillStart+.081,sillEnd-.081]){
+            carpenterPeg(x+side*at,sill,wz-.0525,-1,.026);
+            carpenterPeg(x+side*at,sill,wz+.0525,1,.026);
+          }
         }
       }
       roomSign(room,x,headerCenter,z+entryReach+headerDepth/2);
@@ -1704,7 +1883,7 @@
         glass.rotation.y=angle;
         glazedFrames.push({glass,side});
         scene.add(glass);
-        batch(beam,darkTimber,(wallX+lampX)*.5,h-.045,lampZ,.94,.098,.106);
+        batch(braceTimber,rafterTimber,(wallX+lampX)*.5,h-.045,lampZ,.94,.098,.106);
         const lamp=lantern(lampX,2.45,lampZ,.54,true,h+.37,h-.094);
         if(j===1)shadowLamps[r]=lamp;
       });
@@ -2059,14 +2238,15 @@
       };
     }
     const architectureMaterials=[stone,edge,bronze,plinth,linen,frameOak,photoMat,pictureMetal,pictureBrass,frameScrew,timber,blueTiles,
-      cedar,uprightCedar,walkwayTrim,headerPlank,railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar];
+      cedar,uprightCedar,crossTimber,rafterTimber,slatWood,gateWood,gateLedge,timberSocket,ironPeg,postBand,lanternIron,walkwayTrim,headerPlank,
+      railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar];
     if(supportsShadows)shadowValues=riverShadows.uniforms(T,rooms,shadowLamps,moonDirection.value);
     lightArchitecture(architectureMaterials);
     function architectureBoxes(){
       const boxes=bounceBoxes.slice();
       for(const {geometry,material,matrices} of batches.values()){
-        if(!architectureMaterials.includes(material) || geometry.type==='TorusGeometry'
-          || (material===railFoot && geometry===handrailGeometry))continue;
+        if(!architectureMaterials.includes(material) || geometry.type==='TorusGeometry' || material===gateWood || material===lanternIron
+          || geometry===pegGeometry || (material===railFoot && geometry===handrailGeometry))continue;
         for(const matrix of matrices)boxes.push({material,matrix});
       }
       return boxes;
@@ -2078,11 +2258,14 @@
     lanterns.forEach((_,i)=>lanternMeshes[0].setColorAt(i,color(['#ffffff','#ffdcbb','#ffedc9','#ffd1ac'][i%4])));
     const hanging=lanterns.filter(lamp=>lamp.mountHeight>0);
     hanging.forEach((lamp,i)=>lamp.cordIndex=i);
-    const cords=new T.InstancedMesh(new T.CylinderGeometry(.010,.010,1,8),bamboo,hanging.length);
-    cords.frustumCulled=false;
-    scene.add(reflected(cords));
-    const cord=new T.Object3D(),knottedEnd=new T.Vector3(),cordVector=new T.Vector3();
-    const cordUp=new T.Vector3(0,1,0);
+    const rods=new T.InstancedMesh(new T.CylinderGeometry(.006,.006,1,10),lanternIron,hanging.length);
+    const collars=new T.InstancedMesh(topHem,bamboo,hanging.length);
+    for(const mesh of [rods,collars]){
+      mesh.frustumCulled=false;
+      scene.add(reflected(mesh));
+    }
+    const rod=new T.Object3D(),capCenter=new T.Vector3(),rodVector=new T.Vector3();
+    const rodUp=new T.Vector3(0,1,0);
     const support=new T.Object3D(),localPart=new T.Object3D(),partMatrix=new T.Matrix4();
     function updateLanterns(time){
       nightTime.value=reduced.matches?0:time;
@@ -2115,19 +2298,21 @@
           obj.setMatrixAt(i,partMatrix);
         });
         if(mountHeight){
-          knottedEnd.set(0,.679,0).applyMatrix4(support.matrix);
-          cordVector.set(x,mountHeight,z).sub(knottedEnd);
-          cord.position.copy(knottedEnd).addScaledVector(cordVector,.5);
-          cord.scale.set(1,cordVector.length(),1);
-          cord.quaternion.setFromUnitVectors(cordUp,cordVector.normalize());
-          cord.updateMatrix();
-          cords.setMatrixAt(cordIndex,cord.matrix);
+          capCenter.set(0,.676,0).applyMatrix4(support.matrix);
+          rodVector.set(x,mountHeight-rodDrop,z).sub(capCenter);
+          rod.position.copy(capCenter).addScaledVector(rodVector,.5);
+          rod.scale.set(1,rodVector.length(),1);
+          rod.quaternion.setFromUnitVectors(rodUp,rodVector.normalize());
+          rod.updateMatrix();
+          rods.setMatrixAt(cordIndex,rod.matrix);
+          collars.setMatrixAt(cordIndex,support.matrix);
         }
         glow.position.set(support.position.x,support.position.y+.31*size,support.position.z);
         glow.scale.setScalar(size*(1.13+.037*lift));
       });
       lanternMeshes.forEach(obj=>obj.instanceMatrix.needsUpdate=true);
-      cords.instanceMatrix.needsUpdate=true;
+      rods.instanceMatrix.needsUpdate=true;
+      collars.instanceMatrix.needsUpdate=true;
     }
 
     if(location.protocol!=='file:'){
@@ -2154,7 +2339,8 @@
         }`
     }));
     apparition.position.z=-.85;apparition.renderOrder=1;formation.add(apparition);
-    const shades=new T.InstancedMesh(shadeGeometry,candlePaper(paper.clone()),lights.length);
+    const distantShade=new T.LatheGeometry(shadeProfile.getPoints(24),30);
+    const shades=new T.InstancedMesh(distantShade,candlePaper(paper.clone()),lights.length);
     const hoops=new T.InstancedMesh(hoopGeometry,bamboo,lights.length);
     for(let i=0;i<lights.length;i++)shades.setColorAt(i,color(['#fff0d2','#e9af85','#ffdab8','#fff7de'][i%4]));
     const halos=new T.InstancedMesh(new T.PlaneGeometry(1,1),softGlow(new T.MeshBasicMaterial({
@@ -2322,8 +2508,8 @@
       try{
         if(mode>0){
           const [mask,depth]=await Promise.all([
-            loadShadowTexture('river-shadow-mask.png?v=gallery-frames'),
-            mode>1?loadShadowTexture('river-shadow-depth.png?v=gallery-frames',true):null
+            loadShadowTexture('river-shadow-mask.png?v=timber-moon-gates'),
+            mode>1?loadShadowTexture('river-shadow-depth.png?v=timber-moon-gates',true):null
           ]);
           if(selection!==shadowSelection)return;
           shadowValues.riverShadowMask.value=mask;
@@ -2685,9 +2871,10 @@
       const foliageRequest=textureLoader.loadAsync('materials/river-foliage.webp').catch(()=>null);
       const stoneRequest=textureLoader.loadAsync('materials/river-painted-slate.webp').catch(()=>null);
       const forestFloorRequest=textureLoader.loadAsync('materials/river-forest-floor.webp').catch(()=>null);
-      preparing=Promise.all([atlasRequest,woodRequest,slateRequest,deckRequest,foliageRequest,stoneRequest,forestFloorRequest])
-        .then(([atlas,wood,slate,deck,foliage,paintedStone,forestFloor])=>{
-          garden=makeGarden(atlas,{wood,slate,deck,foliage,paintedStone,forestFloor});
+      const timberRequest=textureLoader.loadAsync('materials/pavilion-timber.webp').catch(()=>null);
+      preparing=Promise.all([atlasRequest,woodRequest,slateRequest,deckRequest,foliageRequest,stoneRequest,forestFloorRequest,timberRequest])
+        .then(([atlas,wood,slate,deck,foliage,paintedStone,forestFloor,pavilionTimber])=>{
+          garden=makeGarden(atlas,{wood,slate,deck,foliage,paintedStone,forestFloor,pavilionTimber});
           startFrames();
         }).catch(showFallback);
     return preparing;
