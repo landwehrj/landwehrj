@@ -136,6 +136,7 @@
     const hemi=new T.HemisphereLight(color('#a5c4ee'),color('#455362'),.40);
     const blueLight=new T.DirectionalLight(color('#92bfe5'),.83);
     blueLight.position.set(-20,28,-35);
+    const moonDirection={value:blueLight.position.clone().sub(blueLight.target.position).normalize()};
     const moonRim=new T.DirectionalLight(color('#83aee7'),.42);
     moonRim.position.set(-27,9,32);
     scene.add(hemi,blueLight,moonRim);
@@ -192,10 +193,15 @@
     }
     const sky=new T.Mesh(new T.SphereGeometry(135,64,24),new T.ShaderMaterial({
       side:T.BackSide,depthWrite:false,
-      uniforms:{deep:{value:color('#030817')},blue:{value:color('#173970')},mist:{value:color('#284353')}},
+      extensions:{derivatives:true},
+      uniforms:{deep:{value:color('#030817')},blue:{value:color('#173970')},mist:{value:color('#284353')},moonDirection},
       vertexShader:`varying vec3 place;
-        void main(){place=position;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
-      fragmentShader:`uniform vec3 deep,blue,mist;varying vec3 place;
+        void main(){
+          vec4 point=modelMatrix*vec4(position,1.);
+          place=point.xyz-cameraPosition;
+          gl_Position=projectionMatrix*viewMatrix*point;
+        }`,
+      fragmentShader:`uniform vec3 deep,blue,mist,moonDirection;varying vec3 place;
         float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
         float noise(vec2 p){
           vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
@@ -216,6 +222,23 @@
           float star=hash(floor(q));
           float starlight=step(.964,star)*exp(-102.*dot(f,f))*smoothstep(.12,.47,h);
           c+=vec3(.18,.25,.37)*starlight*(1.-cloudBand);
+          if(dot(d,moonDirection)>.990){
+            vec3 across=normalize(cross(vec3(0.,1.,0.),moonDirection));
+            vec3 up=cross(moonDirection,across);
+            vec2 lunar=vec2(dot(d,across),dot(d,up))/.0145;
+            float radius=length(lunar);
+            float rim=max(.016,fwidth(radius)*.7);
+            float disc=1.-smoothstep(1.-rim,1.+rim,radius);
+            float halo=exp(-.64*pow(max(0.,radius-1.),2.));
+            c+=vec3(.026,.036,.052)*halo+vec3(.004,.007,.013)*exp(-.062*radius*radius);
+            if(disc>0.){
+              vec2 west=lunar+vec2(.29,-.24),east=lunar-vec2(.37,.22);
+              float seas=.78*exp(-5.8*dot(west,west))+.62*exp(-8.2*dot(east,east));
+              float rock=.18*noise(lunar*5.+7.)+.08*noise(lunar*17.-5.);
+              float face=.79+rock-seas*.24+.09*sqrt(max(0.,1.-radius*radius));
+              c=mix(c,vec3(.85,.92,1.)*face,disc*(1.-cloudBand*.24));
+            }
+          }
         gl_FragColor=vec4(c,1.);
         #include <encodings_fragment>
         }`
@@ -225,15 +248,30 @@
     const {center:riverCenter,bankX}=riverShore;
     const shoreRandom=seedRandom();
     const shore=riverShore.create(T,waterLevel,shoreRandom);
+    const hdrType=renderer.capabilities.isWebGL2 && renderer.extensions.has('EXT_color_buffer_float')
+      ? T.HalfFloatType:T.UnsignedByteType;
     // A reflected camera captures the actual lanterns and banks. The water samples
     // this view through moving ripples, breaking orange reflections into short strokes.
-    const reflection=new T.WebGLRenderTarget(512,256,{minFilter:T.LinearFilter,magFilter:T.LinearFilter,format:T.RGBAFormat});
+    const reflection=new T.WebGLRenderTarget(512,256,{
+      minFilter:T.LinearFilter,magFilter:T.LinearFilter,type:hdrType
+    });
     reflection.texture.encoding=T.LinearEncoding;
     const mirror=new T.PerspectiveCamera();mirror.layers.set(reflectionLayer);
     const reflectionMatrix=new T.Matrix4(), gaze=new T.Vector3();
     const reflectionClip=[new T.Plane(new T.Vector3(0,1,0),-waterLevel+.018)];
     const reflectionPixel=new T.Vector2();
     const [ex,ez]=end;
+    const moorings=[...rooms,{x:ex,z:ez,width:landingWidth,depth:landingDepth}];
+    const wakeX=Math.min(...moorings.map(room=>room.x-room.width/2))-1.2;
+    const wakeZ=Math.min(...moorings.map(room=>room.z-room.depth/2))-1.2;
+    const wakeBounds=new T.Vector4(wakeX,wakeZ,
+      Math.max(...moorings.map(room=>room.x+room.width/2))+1.2-wakeX,
+      Math.max(...moorings.map(room=>room.z+room.depth/2))+1.2-wakeZ);
+    const wakeCanvas=document.createElement('canvas');wakeCanvas.width=256;wakeCanvas.height=1024;
+    const wakeContext=wakeCanvas.getContext('2d');
+    wakeContext.scale(wakeCanvas.width/wakeBounds.z,wakeCanvas.height/wakeBounds.w);
+    wakeContext.translate(-wakeX,-wakeZ);
+    const pileWakes=new T.CanvasTexture(wakeCanvas);
     const furMask=new T.CanvasTexture(riverPortrait.mask);
     const [ax,ay,aw,ah]=atlas.regions[1];
     const photoUniforms={
@@ -256,67 +294,100 @@
     const water=new T.Mesh(new T.PlaneGeometry(260,490),new T.ShaderMaterial({
       extensions:{derivatives:true},
       uniforms:{...photoUniforms,reflectionPixel:{value:reflectionPixel},poolProjection:{value:poolMatrix},reflectedView:{value:reflection.texture},projection:{value:reflectionMatrix},time:nightTime,
-        riverBankProfile:{value:shore.profile},
-        portraitLight:{value:0},navy:{value:color('#020712')},teal:{value:color('#10515e')}},
+        riverBankProfile:{value:shore.profile},pileWakes:{value:pileWakes},wakeBounds:{value:wakeBounds},moonDirection,
+        portraitLight:{value:0},navy:{value:color('#02060d')}},
       vertexShader:`uniform mat4 projection;varying vec4 reflected;varying vec3 world;
         void main(){vec4 p=modelMatrix*vec4(position,1.);world=p.xyz;reflected=projection*p;
         gl_Position=projectionMatrix*viewMatrix*p;}`,
       fragmentShader:`${samplePortrait}
         ${riverShore.waterShader}
-        uniform mat4 poolProjection;uniform sampler2D reflectedView;uniform float time,portraitLight;uniform vec3 navy,teal;
+        uniform mat4 poolProjection;
+        uniform sampler2D reflectedView,pileWakes;
+        uniform vec4 wakeBounds;
+        uniform float time,portraitLight;
+        uniform vec3 navy,moonDirection;
         uniform vec2 reflectionPixel;
         varying vec4 reflected;varying vec3 world;
 
-        vec3 reflectedLight(vec2 uv,vec2 blur){
-          vec3 light=texture2D(reflectedView,uv).rgb*.48;
-          light+=.065*(texture2D(reflectedView,uv+vec2(blur.x,0.)).rgb
-                      +texture2D(reflectedView,uv-vec2(blur.x,0.)).rgb
-                      +texture2D(reflectedView,uv+vec2(0.,blur.y)).rgb
-                      +texture2D(reflectedView,uv-vec2(0.,blur.y)).rgb);
-          light+=.065*(texture2D(reflectedView,uv+blur).rgb
-                      +texture2D(reflectedView,uv-blur).rgb
-                      +texture2D(reflectedView,uv+vec2(-blur.x,blur.y)).rgb
-                      +texture2D(reflectedView,uv+vec2(blur.x,-blur.y)).rgb);
-          return light;
+        float lakeHash(vec2 p){return fract(52.9829189*fract(dot(p,vec2(.06711056,.00583715))));}
+        float lakeNoise(vec2 p){
+          vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+          return mix(mix(lakeHash(i),lakeHash(i+vec2(1.,0.)),f.x),
+                     mix(lakeHash(i+vec2(0.,1.)),lakeHash(i+1.),f.x),f.y);
+        }
+        float resolveWave(float phase){return 1.-smoothstep(.45,2.6,fwidth(phase));}
+        vec2 gradientAtWater(float h,vec2 p){
+          vec2 dx=dFdx(p),dy=dFdy(p);
+          float det=dx.x*dy.y-dx.y*dy.x;
+          return (vec2(dy.y,-dy.x)*dFdx(h)+vec2(-dx.y,dx.x)*dFdy(h))
+                 *sign(det)/max(abs(det),1.e-7);
+        }
+        vec3 reflectionTaps(vec2 uv,vec2 stepUV){
+          vec2 margin=2.*stepUV+reflectionPixel;
+          vec2 tap=clamp(uv,margin,1.-margin);
+          return texture2D(reflectedView,tap).rgb*.38
+               +(texture2D(reflectedView,tap+stepUV).rgb+texture2D(reflectedView,tap-stepUV).rgb)*.22
+               +(texture2D(reflectedView,tap+2.*stepUV).rgb+texture2D(reflectedView,tap-2.*stepUV).rgb)*.09;
         }
         void main(){
           vec2 p=world.xz;
           vec3 ray=cameraPosition-world;
           float dist=length(ray);
-          float grazing=1.-clamp(ray.y/dist,0.,1.);
-          float swell=dot(p,vec2(.50,1.29))-time*.58;
-          float ripple=dot(p,vec2(-2.10,5.6))+sin(swell)*1.5+time*1.16;
-          float chop=dot(p,vec2(3.5,11.8))-sin(p.x*.86)*1.8-time*1.49;
-          float detail=1.-smoothstep(.35,2.3,fwidth(chop));
-          float wave=sin(ripple)+.31*sin(chop)*detail;
-          float waveSlope=.58*cos(swell)+.42*cos(ripple)+.32*cos(chop)*detail;
+          vec3 view=ray/dist;
+          float grazing=1.-clamp(view.y,0.,1.);
+          vec2 breeze=(p+time*vec2(.022,-.016))/29.;
+          float wind=smoothstep(.28,.72,.74*lakeNoise(breeze)+.26*lakeNoise(breeze*1.83+5.));
+          float bend=lakeNoise(p*.29)*2.8;
+          vec2 broad=vec2(.23,.973),medium=vec2(-.38,.925),crossing=vec2(.35,.937);
+          vec2 fine=vec2(.67,.742),capillary=vec2(.12,.993);
+          float swell=dot(p,broad)*.72-time*.019;
+          float ripple=dot(p,medium)*7.8-time*.136+bend+.46*sin(swell);
+          float crossWave=dot(p,crossing)*6.2+time*.15+1.8*lakeNoise(p*.39+8.);
+          float chop=dot(p,fine)*17.7+time*.29+bend*.64;
+          float shimmer=dot(p,capillary)*32.5-time*.88-bend;
+          float rippleCoverage=resolveWave(ripple);
+          float midSlope=cos(ripple)*rippleCoverage,crossSlope=cos(crossWave)*resolveWave(crossWave);
+          float fineSlope=cos(chop)*resolveWave(chop),capSlope=cos(shimmer)*resolveWave(shimmer);
+          vec2 waveSlope=broad*(.023*cos(swell))
+            +mix(.22,1.,wind)*(medium*(.053*midSlope)+crossing*(.047*crossSlope)
+                              +fine*(.044*fineSlope)+capillary*(.024*capSlope));
+
+          float bank=shoreDistance(p);
+          float shallows=1.-smoothstep(.05,1.55,bank);
+          float lapPhase=bank*12.-time*.68+bend*.55;
+          float shoreLap=shallows*sin(lapPhase)*resolveWave(lapPhase);
+          vec2 wakeUV=(p-wakeBounds.xy)/wakeBounds.zw;
+          float contact=texture2D(pileWakes,vec2(wakeUV.x,1.-wakeUV.y)).a;
+          float pilePhase=contact*20.+time*.93;
+          float pileLap=smoothstep(.04,.26,contact)*(1.-smoothstep(.61,.77,contact))
+                        *sin(pilePhase)*resolveWave(pilePhase);
+          waveSlope+=.020*shoreLap*gradientAtWater(bank,p)-.027*pileLap*gradientAtWater(contact,p);
+
           float still=portraitLight*(1.-smoothstep(3.,13.,abs(p.x+2.)))*smoothstep(202.,208.,-p.y);
           vec2 uv=.5+.5*reflected.xy/reflected.w;
-          // Preserve the structure of the planar image at grazing angles.
-          vec2 offset=vec2(.0015*wave+.00075*sin(swell),.0020*waveSlope)
-                     *mix(1.,.53,grazing)*mix(1.,.32,still);
-          vec2 blur=max(reflectionPixel*.83,vec2(.0010,.0030)*mix(1.,.42,grazing));
-          vec3 lights=reflectedLight(clamp(uv+offset,blur,1.-blur),blur);
-          float fresnel=.045+.955*pow(grazing,5.0);
-          float warm=max(0.,lights.r-lights.b);
-          float stroke=.94+.06*sin(ripple)*detail;
-          vec3 rippleNormal=normalize(vec3(.017*cos(swell)-.031*cos(chop)*detail,1.,
-                                          .045*waveSlope));
-          vec3 skyHalfway=normalize(normalize(ray)+normalize(vec3(-.42,.48,.77)));
-          float skySheen=pow(max(0.,dot(rippleNormal,skyHalfway)),20.);
-          float nearby=(1.-smoothstep(8.,28.,dist))*(1.-.80*still);
-          vec3 closeRipples=vec3(.016,.030,.054)*nearby*(.24+.72*skySheen)
-                            *(.42+.58*smoothstep(-.55,.82,waveSlope));
-          vec3 deepWater=navy+teal*(.020+.011*waveSlope)*exp(-.024*dist)+closeRipples;
-          vec3 river=mix(deepWater,lights*stroke,fresnel)+vec3(1.,.52,.22)*warm*.11;
-          float bank=shoreDistance(p);
-          float shallow=1.-smoothstep(.0,1.55,bank);
-          float lapPhase=bank*11.+1.85*sin(p.y*1.44)-time*1.27;
-          float lap=sin(lapPhase)*(.58+.42*sin(p.y*.93+time*.18));
-          vec3 silt=vec3(.030,.038,.037)*(.78+.26*waveSlope);
-          river=mix(river,silt,shallow*(.43-.32*grazing));
-          river+=vec3(.024,.035,.044)*shallow*.23*smoothstep(.28,.99,lap)
-                 *(1.-smoothstep(.22,1.8,fwidth(lapPhase)));
+          vec3 viewSlope=mat3(viewMatrix)*vec3(waveSlope.x,0.,waveSlope.y);
+          vec2 offset=vec2(.048*viewSlope.x,-.30*viewSlope.z)
+                     *mix(1.,.33,grazing)*mix(1.,.21,still);
+          // Stretch the reflected highlights vertically while tightening the distant image.
+          float streak=mix(.0067,.00155,pow(grazing,3.))*mix(.62,1.17,wind);
+          vec2 blur=vec2(reflectionPixel.x*.31,max(reflectionPixel.y*.67,streak));
+          vec3 lights=reflectionTaps(uv+offset,blur);
+          float warmLight=smoothstep(.035,.22,lights.r-lights.b);
+          float facet=.43*midSlope+.43*crossSlope+.51*fineSlope+.26*capSlope;
+          float shimmerMask=mix(.14,1.28,smoothstep(-.42,.59,facet));
+          lights*=mix(1.,shimmerMask,warmLight*(1.-.84*still));
+          vec3 normal=normalize(vec3(waveSlope.x,1.,waveSlope.y));
+          float noV=max(dot(normal,view),0.);
+          float fresnel=.02+.98*pow(1.-noV,5.);
+          vec3 skyHalfway=normalize(view+moonDirection);
+          float noH=max(dot(normal,skyHalfway),.01);
+          float roughness=mix(.045,.073,wind);
+          float slopeSq=(1.-noH*noH)/(noH*noH);
+          float moonGlint=exp(-slopeSq/(roughness*roughness));
+          vec3 skyGlints=vec3(.35,.54,.83)*moonGlint*.52*(1.-.86*still);
+          vec3 silt=vec3(.011,.017,.019);
+          vec3 deepWater=mix(navy,silt,shallows*.20);
+          vec3 river=mix(deepWater,lights+skyGlints,fresnel);
           float bankHaze=mix(.42,1.,1.-smoothstep(2.,19.,bank));
           float haze=(1.-exp(-max(dist-10.,0.)*.019))*smoothstep(.70,.999,grazing)*bankHaze;
           haze*=.79+.21*sin(p.y*.24+p.x*.21+time*.12+1.1*sin(p.x*.31));
@@ -324,13 +395,13 @@
         if(still>.001){
           vec4 projected=poolProjection*vec4(world,1.);
           vec2 q=projected.xy/projected.w*.5+.5;
-          q+=vec2(.0036*wave,.0024*waveSlope);
+          q+=vec2(.0022*sin(swell)+.0013*sin(ripple)*rippleCoverage,.0019*cos(swell));
           if(projected.w>0. && all(greaterThan(q,vec2(0.))) && all(lessThan(q,vec2(1.)))){
             float fur=texture2D(furMask,q).a;
             float blanket=.27*(1.-smoothstep(.32,.50,length(q-.5)));
-            float strength=(.71+.15*stroke)*max(fur,blanket)*portraitLight;
+            float strength=(.81+.04*midSlope)*max(fur,blanket)*portraitLight;
             vec3 pigment=furColor(q)*vec3(.83,.93,1.);
-            float crest=smoothstep(.87,.995,sin(ripple+.55*sin(chop)));
+            float crest=smoothstep(.87,.995,sin(ripple+.40*sin(chop)))*rippleCoverage;
             float glint=crest*(.5+.5*sin(p.x*2.8+sin(p.y*4.-time*.5)));
             river=mix(river,pigment*(1.-.12*crest),strength)
                 +(lights*.10+vec3(.022,.043,.060)*glint)*strength;
@@ -1304,6 +1375,12 @@
       batch(trim,stone,x,waterLevel-.08,z,.56,.285,.58);
       batch(trim,edge,x,waterLevel+.055,z,.54,.048,.56);
       batch(poolGeo,waterContact,x,waterLevel+.003,z,1.54,1,1.63);
+      const radius=.96;
+      const falloff=wakeContext.createRadialGradient(x,z,0,x,z,radius);
+      falloff.addColorStop(0,'#fff');
+      falloff.addColorStop(1,'#fff0');
+      wakeContext.fillStyle=falloff;
+      wakeContext.fillRect(x-radius,z-radius,2*radius,2*radius);
     }
     const pierWidth=.354,pierCapWidth=.414,wallJoint=.006,pavilionInset=.245;
     const wallCapBase=.742,wallCapTop=.826,wallBandBase=.527;
@@ -1865,7 +1942,7 @@
     }
     const architectureMaterials=[stone,edge,bronze,plinth,linen,photoMat,pictureMetal,timber,blueTiles,
       cedar,uprightCedar,walkwayTrim,headerPlank,railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar];
-    if(supportsShadows)shadowValues=riverShadows.uniforms(T,rooms,shadowLamps,blueLight.position);
+    if(supportsShadows)shadowValues=riverShadows.uniforms(T,rooms,shadowLamps,moonDirection.value);
     lightArchitecture(architectureMaterials);
     function architectureBoxes(){
       const boxes=bounceBoxes.slice();
@@ -2002,8 +2079,6 @@
     canvas.setAttribute('aria-hidden','true');view.appendChild(canvas);
     // The opaque lanterns mark their pixels in alpha. Keeping capture and bloom
     // in linear light lets the lanterns glow while photos and moonlight stay sharp.
-    const hdrType=renderer.capabilities.isWebGL2 && renderer.extensions.has('EXT_color_buffer_float')
-      ? T.HalfFloatType:T.UnsignedByteType;
     const gl=renderer.getContext();
     const format=hdrType===T.HalfFloatType?gl.RGBA16F:gl.RGBA8;
     const sampleCounts=renderer.capabilities.isWebGL2
