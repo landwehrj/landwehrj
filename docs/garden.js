@@ -12,7 +12,7 @@
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  const {rooms,bridges,route,trail,end,landingWidth,landingDepth,lanternSpans,bridgePoint} = riverWalk;
+  const {rooms,bridges,route,trail,entrance:arrivalDock,end,landingWidth,landingDepth,lanternSpans,bridgePoint} = riverWalk;
   const order = [...rooms.flatMap(room=>room.photos),1];
   const finalIndex = order.length-1;
   const fullTurn = Math.PI*2;
@@ -261,7 +261,9 @@
     const reflectionClip=[new T.Plane(new T.Vector3(0,1,0),-waterLevel+.018)];
     const reflectionPixel=new T.Vector2();
     const [ex,ez]=end;
-    const moorings=[...rooms,{x:ex,z:ez,width:landingWidth,depth:landingDepth}];
+    const entryThresholdZ=rooms[0].z+rooms[0].depth/2;
+    const moorings=[...rooms,{x:ex,z:ez,width:landingWidth,depth:landingDepth},
+      {x:arrivalDock[0],z:(arrivalDock[1]+entryThresholdZ)/2,width:bridges[0].width,depth:bridges[0].length}];
     const wakeX=Math.min(...moorings.map(room=>room.x-room.width/2))-1.2;
     const wakeZ=Math.min(...moorings.map(room=>room.z-room.depth/2))-1.2;
     const wakeBounds=new T.Vector4(wakeX,wakeZ,
@@ -1758,17 +1760,24 @@
       new T.Vector3(0,-.031,-.091),new T.Vector3(0,.054,-.019),
       new T.Vector3(0,.103,.101),new T.Vector3(0,.056,.188),new T.Vector3(0,.010,.205)
     ]),18,.013,8,false);
-    function roomSign(room,x,y,headerFace){
+    const roomSignGeometry=new T.PlaneGeometry(2.8,.44);
+    function roomSigns(room,y,headerFaceOffset){
       const c=document.createElement('canvas');c.width=768;c.height=120;
       const ctx=c.getContext('2d');ctx.fillStyle='#182c37';ctx.fillRect(0,0,768,120);
       ctx.strokeStyle='#a38962';ctx.lineWidth=3;ctx.strokeRect(6,6,756,108);
       ctx.fillStyle='#f5ddb3';ctx.font='italic 68px Georgia';ctx.textAlign='center';
       ctx.fillText(room.name,384,83);
       const texture=new T.CanvasTexture(c);texture.encoding=T.sRGBEncoding;
+      const material=new T.MeshBasicMaterial({map:texture});
       const backing=.034;
-      batch(trim,darkTimber,x,y,headerFace+backing/2-.002,2.829,.464,backing);
-      const sign=new T.Mesh(new T.PlaneGeometry(2.8,.44),new T.MeshBasicMaterial({map:texture}));
-      sign.position.set(x,y,headerFace+backing);scene.add(reflected(sign));
+      for(const side of [-1,1]){
+        const headerFace=room.z+side*headerFaceOffset;
+        batch(trim,darkTimber,room.x,y,headerFace+side*(backing/2-.002),2.829,.464,backing);
+        const sign=new T.Mesh(roomSignGeometry,material);
+        sign.position.set(room.x,y,headerFace+side*backing);
+        sign.rotation.y=side<0?Math.PI:0;
+        scene.add(reflected(sign));
+      }
     }
     rooms.forEach((room,r)=>{
       const {x,z,width:w,depth:d}=room,h=galleryHeights[r];
@@ -1849,7 +1858,7 @@
           }
         }
       }
-      roomSign(room,x,headerCenter,z+entryReach+headerDepth/2);
+      roomSigns(room,headerCenter,entryReach+headerDepth/2);
       room.photos.forEach((id,j)=>{
         const side=j%2?1:-1, count=Math.ceil((room.photos.length-(side===1?1:0))/2);
         const pz=z+d/2-(Math.floor(j/2)+.5)*d/count, px=x+side*(w/2-.39);
@@ -2118,6 +2127,7 @@
     }
     for(const b of bridges){
       const {start,finish,length,width,normal,startsAtBend,endsAtBend}=b;
+      const entranceDock=start.x===arrivalDock[0] && start.z===arrivalDock[1];
       const header=.205,miterHalf=.067,border=deckBorderWidth,railInset=.16;
       const innerWidth=width-2*border;
       const boardStart=bridgeCut(b,startsAtBend?miterHalf*Math.hypot(start.nx,start.nz):header,start);
@@ -2143,6 +2153,8 @@
       for(const side of [-1,1]){
         const offset=side*(width/2-border/2);
         deckEdgeBoards(start,finish,normal,.26,border,offset);
+        // The boarding side stays open alongside the moored boat.
+        if(entranceDock && side===-1)continue;
         const postAt=j=>{
           const [x,z]=bridgePoint(railStart,railFinish,j/spans,side*postOffset);
           if(j===0 && startGallery)return galleryRailPost(startGallery,start,Math.sign(x-startGallery.x),postAngle(j),postOffset);
@@ -2159,6 +2171,11 @@
       for(let j=startsAtBend?1:0;j<=spans;j++){
         const [cx,cz]=bridgePoint(railStart,railFinish,j/spans,0);
         batch(beam,darkTimber,cx,-.30,cz,width-.14,.16,.16,postAngle(j));
+      }
+      if(entranceDock){
+        for(const side of [-1,1])for(const t of [.18,.66]){
+          deckPile(...bridgePoint(start,finish,t,side*(width/2-.27)));
+        }
       }
     }
     for(const post of railPosts.values()){
@@ -2208,6 +2225,104 @@
       blockWalking(end[0]+side*3.14,end[1],.25,4.6);
       for(const dz of [-1.68,1.68])deckPile(end[0]+side*2.98,end[1]+dz);
       lantern(end[0]+side*3.10,1.06,end[1]-1.66,.96,true);
+    }
+    const rowboatMooring=new T.Vector3(arrivalDock[0]+1.40,.218,entryThresholdZ+1.15);
+    batch(trim,railWood,rowboatMooring.x,.10,rowboatMooring.z,.16,.20,.16);
+    batch(trim,railCap,rowboatMooring.x,.207,rowboatMooring.z,.198,.036,.198);
+    const boatPaint=new T.MeshStandardMaterial({
+      color:color('#557780'),roughness:.59,roughnessMap:cedarFinish,bumpMap:cedarMap,bumpScale:.012
+    });
+    const boatInside=boatPaint.clone();
+    boatInside.color.copy(color('#926e52'));boatInside.roughness=.77;
+    const ropeMaterial=new T.MeshStandardMaterial({color:color('#ad9066'),roughness:.92});
+    const rowboat=new T.Group();
+    rowboat.name='Entrance rowboat';
+    const hullOutline=new T.CatmullRomCurve3([
+      [0,.41,-1.66],[.31,.32,-1.27],[.54,.245,-.65],[.62,.224,.08],
+      [.58,.234,.77],[.43,.294,1.39],[0,.303,1.49],
+      [-.43,.294,1.39],[-.58,.234,.77],[-.62,.224,.08],[-.54,.245,-.65],[-.31,.32,-1.27]
+    ].map(([x,y,z])=>new T.Vector3(x,y,z)),true);
+    const hullSteps=56;
+    const hullSection=[
+      [.54,.80,0],[.73,.91,.14],[.91,.972,.46],[1,1,1],
+      [.915,.975,.98],[.84,.94,.60],[.61,.82,.33]
+    ];
+    const hullPoints=hullOutline.getPoints(hullSteps);
+    const hullPositions=[],hullUV=[],hullIndices=[];
+    for(const [ring,[width,length,height]] of hullSection.entries()){
+      for(const [i,edge] of hullPoints.entries()){
+        const y=ring===hullSection.length-1?-.078:T.MathUtils.lerp(-.25,edge.y,height);
+        hullPositions.push(edge.x*width,y,edge.z*length);
+        hullUV.push(i/hullSteps*4,ring*.39);
+      }
+    }
+    const hull=new T.BufferGeometry();
+    for(let ring=0;ring<hullSection.length-1;ring++){
+      const start=hullIndices.length;
+      for(let i=0;i<hullSteps;i++){
+        const a=ring*(hullSteps+1)+i,b=a+1,c=a+hullSteps+1,d=c+1;
+        hullIndices.push(a,c,b,b,c,d);
+      }
+      hull.addGroup(start,hullIndices.length-start,ring<3?0:1);
+    }
+    for(const [ring,y,material] of [[0,-.25,0],[hullSection.length-1,-.078,1]]){
+      const start=hullIndices.length,center=hullPositions.length/3;
+      hullPositions.push(0,y,0);hullUV.push(2,0);
+      for(let i=0;i<hullSteps;i++){
+        const a=ring*(hullSteps+1)+i;
+        hullIndices.push(center,material?a+1:a,material?a:a+1);
+      }
+      hull.addGroup(start,hullIndices.length-start,material);
+    }
+    hull.setAttribute('position',new T.Float32BufferAttribute(hullPositions,3));
+    hull.setAttribute('uv',new T.Float32BufferAttribute(hullUV,2));
+    hull.setIndex(hullIndices);hull.computeVertexNormals();
+    rowboat.add(reflected(new T.Mesh(hull,[boatPaint,boatInside])));
+    rowboat.add(reflected(new T.Mesh(new T.TubeGeometry(hullOutline,hullSteps,.025,8,true),railWood)));
+    function boatTimber(x,y,z,w,h,d){
+      const timber=new T.Mesh(trim,railWood);
+      timber.position.set(x,y,z);timber.scale.set(w,h,d);
+      rowboat.add(reflected(timber));
+    }
+    for(const z of [-.43,.69]){
+      boatTimber(0,.115,z,.97,.051,.26);
+      for(const side of [-1,1])boatTimber(side*.426,.052,z,.075,.115,.21);
+    }
+    const oarShaft=new T.CylinderGeometry(.021,.017,1.45,8);
+    for(const side of [-1,1]){
+      const oar=new T.Group();
+      oar.position.set(side*.15,.162,.045);oar.rotation.y=side*.14;
+      const shaft=new T.Mesh(oarShaft,railWood);
+      shaft.rotation.x=Math.PI/2;
+      const blade=new T.Mesh(trim,boatInside);
+      blade.position.z=.82;blade.scale.set(.143,.026,.37);
+      oar.add(reflected(shaft),reflected(blade));rowboat.add(oar);
+    }
+    scene.add(rowboat);
+    const ropeSegments=12;
+    const rope=new T.InstancedMesh(new T.CylinderGeometry(.012,.012,1,6),ropeMaterial,ropeSegments);
+    rope.instanceMatrix.setUsage(T.DynamicDrawUsage);rope.frustumCulled=false;scene.add(reflected(rope));
+    const ropePart=new T.Object3D(),ropePrevious=new T.Vector3(),ropeNext=new T.Vector3();
+    const ropeEnd=new T.Vector3(),ropeAxis=new T.Vector3(),ropeUp=new T.Vector3(0,1,0);
+    function updateRowboat(time){
+      rowboat.position.set(arrivalDock[0]+2.48+.034*Math.sin(time*.61),
+        waterLevel+.18+.036*Math.sin(time*1.37),entryThresholdZ+2.25+.028*Math.cos(time*.81));
+      rowboat.rotation.set(.022*Math.sin(time*1.05),.046+.022*Math.sin(time*.58),.046*Math.sin(time*1.17+.7));
+      rowboat.updateMatrixWorld(true);
+      ropeEnd.set(0,.385,-1.60).applyMatrix4(rowboat.matrixWorld);
+      ropePrevious.copy(rowboatMooring);
+      for(let i=0;i<ropeSegments;i++){
+        const t=(i+1)/ropeSegments;
+        ropeNext.lerpVectors(rowboatMooring,ropeEnd,t);
+        ropeNext.y-=.12*Math.sin(t*Math.PI);
+        ropePart.position.lerpVectors(ropePrevious,ropeNext,.5);
+        ropeAxis.subVectors(ropeNext,ropePrevious);
+        ropePart.scale.set(1,ropeAxis.length()+.004,1);
+        ropePart.quaternion.setFromUnitVectors(ropeUp,ropeAxis.normalize());
+        ropePart.updateMatrix();rope.setMatrixAt(i,ropePart.matrix);
+        ropePrevious.copy(ropeNext);
+      }
+      rope.instanceMatrix.needsUpdate=true;
     }
     for(const {geometry,material,matrices} of batches.values()){
       const objects=new T.InstancedMesh(geometry,material,matrices.length);
@@ -2301,7 +2416,7 @@
     }
     const architectureMaterials=[stone,edge,bronze,plinth,linen,frameOak,photoMat,pictureMetal,pictureBrass,frameScrew,timber,blueTiles,
       cedar,uprightCedar,crossTimber,rafterTimber,slatWood,gateWood,gateLedge,timberSocket,ironPeg,postBand,lanternIron,walkwayTrim,headerPlank,
-      railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar];
+      railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar,boatPaint,boatInside,ropeMaterial];
     if(supportsShadows)shadowValues=riverShadows.uniforms(T,rooms,shadowLamps,moonDirection.value);
     lightArchitecture(architectureMaterials);
     function architectureBoxes(){
@@ -2581,8 +2696,8 @@
       try{
         if(mode>0){
           const [mask,depth]=await Promise.all([
-            loadShadowTexture('river-shadow-mask.png?v=timber-moon-gates'),
-            mode>1?loadShadowTexture('river-shadow-depth.png?v=timber-moon-gates',true):null
+            loadShadowTexture('river-shadow-mask.png?v=entrance-dock'),
+            mode>1?loadShadowTexture('river-shadow-depth.png?v=entrance-dock',true):null
           ]);
           if(selection!==shadowSelection)return;
           shadowValues.riverShadowMask.value=mask;
@@ -2784,11 +2899,14 @@
         current=finalIndex;pathCaption('The long boardwalk','Follow the lanterns downstream');
       }else if(index===finalIndex){
         camera.position.set(ex,1.62,ez-1.4);yaw=0;pitch=-.46;select(index);
+      }else if(reset && index===0){
+        camera.position.set(arrivalDock[0]+.54,1.62,arrivalDock[1]-.35);
+        yaw=-.15;pitch=-.083;current=index;
+        pathCaption('Riverside gallery',rooms[0].name);
       }else{
         const stop=stations[index];
-        camera.position.set(stop.x,1.62,stop.z+(reset?1.78:0));
-        yaw=reset?Math.atan2(camera.position.x-portraits[index].position.x,1.78):stop.angle;
-        pitch=reset?.06:.055;select(index);
+        camera.position.set(stop.x,1.62,stop.z);
+        yaw=stop.angle;pitch=.055;select(index);
       }
       setGuide(-1);camera.rotation.set(pitch,yaw,0,'YXZ');draw();
     }
@@ -2865,7 +2983,7 @@
         const next=rooms.find(r=>r.z<p.z);
         if(next)pathCaption('Across the water',next.name);
       }
-      camera.rotation.set(pitch,yaw,0,'YXZ');updateLanterns(time);draw();
+      camera.rotation.set(pitch,yaw,0,'YXZ');updateLanterns(time);updateRowboat(nightTime.value);draw();
     }
     guide.addEventListener('click',follow);
     canvas.addEventListener('pointerdown',e=>{
@@ -2898,7 +3016,7 @@
     });
     canvas.addEventListener('lostpointercapture',()=>drag=null);
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();showFallback()});
-    resize();updateLanterns(0);go(current,true);
+    updateRowboat(0);resize();updateLanterns(0);go(current,true);
     ready=true;
     if(shadowValues)void changeShadows();
     return {go,update,resize,step(action){

@@ -9,6 +9,7 @@ const riverWalk = (() => {
   ];
   const route=[],bridges=[],lanternSpans=[];
   const width=3.14,approach=1.35,landingWidth=6.6,landingDepth=4.7;
+  const entrance=[rooms[0].x,rooms[0].z+rooms[0].depth/2+7.6];
   function join(x,z,normal,neighbor){
     if(!neighbor)return {x,z,...normal};
     const scale=1/(1+normal.nx*neighbor.nx+normal.nz*neighbor.nz);
@@ -49,7 +50,10 @@ const riverWalk = (() => {
       bridge(points);
       lanternSpans.push([previous,front]);
       route.push(...points.slice(1));
-    }else route.push(front);
+    }else{
+      bridge([entrance,front]);
+      route.push(entrance,front);
+    }
     route.push(back);
   }
   const trail=[route[route.length-1],[1,-85],[-4,-98],[-8,-108],[-8,-123],
@@ -80,5 +84,5 @@ const riverWalk = (() => {
     const t=Math.max(0,Math.min(1,((x-b.sx)*dx+(z-b.sz)*dz)/(b.length*b.length)));
     return [b.sx+dx*t,b.sz+dz*t];
   }
-  return {rooms,bridges,route,trail,end,landingWidth,landingDepth,lanternSpans,bridgePoint,bridgeCenter,roomAt,walkable};
+  return {rooms,bridges,route,trail,entrance,end,landingWidth,landingDepth,lanternSpans,bridgePoint,bridgeCenter,roomAt,walkable};
 })();
