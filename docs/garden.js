@@ -151,7 +151,7 @@
     const movingValues=movingButton && renderer.capabilities.isWebGL2 && typeof riverShadows!=='undefined'
       && riverShadows.movingUniforms?riverShadows.movingUniforms(T,color('#ffaf73')):null;
     const shadowLamps=[],movingLanterns=[];
-    let shadowValues=null,movingEffect=null,movingEnabled=false;
+    let shadowValues=null,movingEffect=null,movingEnabled=false,movingActive=false;
     const bounceBoxes=[];
     const bounceMatrix=new T.Object3D();
     let giEffect=null;
@@ -901,13 +901,13 @@
         const receivesDockContact=isDeck || isDeckTrim || isStone;
         const exterior=isStone || isDeck || isDeckTrim || boatFinish || (grainFinish && !grainFinish.timber && material!==uprightCedar);
         const profile=isGateCap?'slate-ledge':isStone?'stone':isPrint?'print':isMat?'mat':isFrame?'frame':isDeck?'deck':isDeckTrim?'deck-trim':'lanterns';
-        material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant()+(movingEnabled?'-moving':'')
+        material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant()+(movingActive?'-moving':'')
           +(grainFinish?'-joinery-'+material.id:exterior?'-exterior':'')+(boatFinish?'-boat-'+boatFinish:'');
         material.onBeforeCompile=shader=>{
           const variant=shadowVariant(),castShadows=variant!=='off';
           addRiverMist(shader);
           if(giUniforms)riverGI.receive(shader,giUniforms);
-          if(movingEnabled)riverShadows.receiveMoving(shader,movingValues);
+          if(movingActive)riverShadows.receiveMoving(shader,movingValues);
           shader.uniforms.riverFixtures={value:lightmap};
           shader.uniforms.riverFixtureColor=warm;
           shader.uniforms.riverFixtureTime=nightTime;
@@ -956,7 +956,7 @@
                 }
               }
             }
-            ${movingEnabled?`
+            ${movingActive?`
             vec3 movingReceiver=inverseTransformDirection(geometryNormal,viewMatrix);
             for(int movingSlot=0;movingSlot<RIVER_MOVING_LIGHTS;movingSlot++){
               float power=movingLampPower[movingSlot];
@@ -3019,23 +3019,36 @@
       shadowControl.hidden=false;
       shadowControl.addEventListener('change',changeShadows);
     }
+    function setMovingActive(active){
+      if(active===movingActive)return;
+      movingActive=active;
+      for(const material of architectureMaterials)material.needsUpdate=true;
+    }
+    function failMovingShadows(error){
+      movingEnabled=false;
+      setMovingActive(false);
+      console.warn('Moving lantern shadows are unavailable:',error);
+      movingButton.textContent='Moving shadows unavailable';
+      movingButton.title=error.message;
+      movingButton.setAttribute('aria-pressed','false');
+      movingButton.disabled=true;
+    }
     function toggleMovingShadows(){
       if(!movingEnabled && !movingEffect){
         try{
           const matrices=architectureBoxes().map(box=>box.matrix);
           movingEffect=riverShadows.createMoving(T,renderer,movingValues,matrices,screenMaterial,drawPass);
         }catch(error){
-          console.warn('Moving lantern shadows are unavailable:',error);
-          movingButton.disabled=true;
+          failMovingShadows(error);
           return;
         }
       }
       movingEnabled=!movingEnabled;
       movingButton.setAttribute('aria-pressed',String(movingEnabled));
-      movingButton.textContent=movingEnabled?'Moving shadows on':'Moving shadows off';
-      for(const material of architectureMaterials)material.needsUpdate=true;
+      movingButton.textContent='Moving shadows'+(movingEnabled?' on':' off');
+      if(movingEnabled)setMovingActive(true);
       updateLanterns(nightTime.value);
-      draw();
+      if(dialog.open && !view.hidden)draw();
     }
     if(movingLanterns.length){
       movingButton.hidden=false;
@@ -3077,14 +3090,21 @@
     }
     function draw(){
       if(giUniforms?.riverGIEnabled.value)giEffect.update(nightTime.value);
-      if(movingEnabled){
-        const nearby=movingLanterns.map(lamp=>{
+      if(movingActive){
+        const nearby=movingEnabled?movingLanterns.map(lamp=>{
           const distance=camera.position.distanceTo(lamp.movingPath.center);
           const visibility=1-T.MathUtils.smoothstep(distance,15,22);
           const power=visibility*(.96+.04*Math.sin(nightTime.value*3.2+lamp.movingPath.phase));
           return {lamp,distance,power};
-        }).filter(light=>light.power>0).sort((a,b)=>a.distance-b.distance).slice(0,movingValues.movingLampPower.value.length);
-        movingEffect.update(nightTime.value,nearby);
+        }).filter(light=>light.power>0):[];
+        try{
+          const occupied=movingEffect.update(performance.now()*.001,nearby);
+          if(!movingEnabled && !occupied)setMovingActive(false);
+        }
+        catch(error){
+          failMovingShadows(error);
+          updateLanterns(nightTime.value);
+        }
       }
       sky.position.set(camera.position.x,0,camera.position.z);
       camera.updateMatrixWorld();

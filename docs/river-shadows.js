@@ -1,7 +1,8 @@
 const riverShadows=(() => {
   const reach=5.8,faceSize=192,bakeSize=224,textureWidth=256;
   const margin=2.4,moonStart=12,moonRange=24;
-  const movingSize=512,movingRange=4.8,movingSpread=1.3,movingLimit=2;
+  const movingSize=512,movingRange=4.8,movingSpread=1.3;
+  const movingActiveLimit=2,movingLimit=movingActiveLimit+1;
 
   function uniforms(T,rooms,lamps,moon){
     return {
@@ -215,7 +216,9 @@ const riverShadows=(() => {
     const unit=new T.Box3(new T.Vector3(-.5,-.5,-.5),new T.Vector3(.5,.5,.5));
     const bounds=new T.Box3();
     const trees=new Map();
-    const slots=Array.from({length:movingLimit},()=>({lamp:null,time:-Infinity,power:0}));
+    const slots=Array.from({length:movingLimit},()=>({
+      lamp:null,time:-Infinity,power:0,fade:0,wanted:false
+    }));
     const vertical=new T.Vector3(0,1,0);
     if(movingSize*movingLimit>renderer.capabilities.maxTextureSize)throw Error('Moving shadow atlas exceeds GPU texture size');
     const target=new T.WebGLRenderTarget(movingSize*movingLimit,movingSize,{
@@ -243,42 +246,62 @@ const riverShadows=(() => {
       }
     `);
     values.movingShadowDepth.value=target.texture;
-    let last=-Infinity;
+    let lastFrame=null,frameSpacing=1/60,nextUpdate=-Infinity;
     const positions=values.movingLamp.value,origins=values.movingShadowOrigin.value;
     const axes=values.movingShadowAxis.value,across=values.movingShadowAcross.value,up=values.movingShadowUp.value;
     return {update(time,nearby){
-      for(const slot of slots)if(!nearby.some(({lamp})=>lamp===slot.lamp))slot.lamp=null;
-      for(const {lamp,power} of nearby){
+      const elapsed=lastFrame===null?0:time-lastFrame;
+      lastFrame=time;
+      if(elapsed>.005 && elapsed<.20)frameSpacing+=(elapsed-frameSpacing)*.16;
+      const fadeStep=T.MathUtils.clamp(elapsed,0,.06);
+      const incumbent=lamp=>slots.some(slot=>slot.lamp===lamp && slot.wanted);
+      // Small changes in camera distance should not trade two nearly equal lights.
+      const wanted=nearby.map(light=>({...light,score:light.distance-(incumbent(light.lamp)?1.4:0)}))
+        .sort((a,b)=>a.score-b.score).slice(0,movingActiveLimit);
+      for(const slot of slots){
+        slot.wanted=wanted.some(({lamp})=>lamp===slot.lamp);
+        if(slot.wanted && slot.time!==-Infinity)slot.fade=Math.min(1,slot.fade+fadeStep/.31);
+        if(!slot.wanted){
+          slot.fade=Math.max(0,slot.fade-fadeStep/.27);
+          if(slot.fade===0)slot.lamp=null;
+        }
+      }
+      for(const {lamp,power} of wanted){
         let i=slots.findIndex(slot=>slot.lamp===lamp);
         if(i<0){
           i=slots.findIndex(slot=>!slot.lamp);
+          if(i<0)continue;
           slots[i].lamp=lamp;
           slots[i].time=-Infinity;
+          slots[i].fade=0;
           axes[i].copy(lamp.movingPath.axis);
           across[i].crossVectors(axes[i],vertical).normalize();
           up[i].crossVectors(axes[i],across[i]);
         }
         slots[i].power=power;
-        positions[i].copy(lamp.glow.position);
+        slots[i].wanted=true;
       }
-      // Keep tiles assigned as the camera moves and update the oldest one first.
+      // Warm a new tile first, then refresh the oldest tile whose light moved.
       let candidate=-1;
-      slots.forEach(({lamp,time:built},i)=>{
-        if(!lamp || (built!==-Infinity && positions[i].distanceToSquared(origins[i])<.0001))return;
+      slots.forEach(({lamp,time:built,wanted},i)=>{
+        if(!lamp)return;
+        positions[i].copy(lamp.glow.position);
+        if(!wanted || (built!==-Infinity && positions[i].distanceToSquared(origins[i])<.000036))return;
         if(candidate<0 || built<slots[candidate].time)candidate=i;
       });
-      const interval=1/(nearby.length>1?16:12);
-      if(candidate>=0 && (slots[candidate].time===-Infinity || time<last || time-last>=interval)){
+      // Keep work below one tile per frame and reduce the cadence on slower clients.
+      const interval=Math.max(1/32,frameSpacing*1.65);
+      if(candidate>=0 && (slots[candidate].time===-Infinity || time+.001>=nextUpdate)){
         const i=candidate,center=slots[i].lamp.movingPath.center;
         if(!trees.has(center)){
           const solids=matrices.filter(matrix=>bounds.copy(unit).applyMatrix4(matrix).distanceToPoint(center)<movingRange+1.7);
           trees.set(center,buildTree(T,solids,renderer.capabilities.maxTextureSize,center));
         }
         const {tree,height,count}=trees.get(center);
-        origins[i].copy(positions[i]);
         trace.riverShadowTree.value=tree;
         trace.riverShadowTreeHeight.value=height;
         trace.riverShadowNodeCount.value=count;
+        origins[i].copy(positions[i]);
         trace.traceOrigin.value=origins[i];
         trace.traceAxis.value=axes[i];
         trace.traceAcross.value=across[i];
@@ -287,11 +310,14 @@ const riverShadows=(() => {
         target.viewport.set(i*movingSize,0,movingSize,movingSize);
         target.scissor.copy(target.viewport);
         drawPass(material,target);
-        slots[i].time=last=time;
+        slots[i].time=time;
+        nextUpdate=Math.max(time+interval*.45,Math.min(time+interval,nextUpdate+interval));
       }
       slots.forEach((slot,i)=>{
-        values.movingLampPower.value[i]=slot.lamp && slot.time!==-Infinity?slot.power:0;
+        const fade=slot.fade*slot.fade*(3-2*slot.fade);
+        values.movingLampPower.value[i]=slot.lamp && slot.time!==-Infinity?slot.power*fade:0;
       });
+      return slots.some(slot=>slot.lamp!==null);
     }};
   }
 
