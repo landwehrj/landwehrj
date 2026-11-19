@@ -12,7 +12,7 @@
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
-  const {rooms,bridges,route,trail,end,landingDepth,lanternSpans,bridgePoint} = riverWalk;
+  const {rooms,bridges,route,trail,end,landingWidth,landingDepth,lanternSpans,bridgePoint} = riverWalk;
   const order = [...rooms.flatMap(room=>room.photos),1];
   const finalIndex = order.length-1;
   const fullTurn = Math.PI*2;
@@ -222,24 +222,9 @@
     }));
     scene.add(reflected(sky));
 
-    function riverCenter(z){return 6.7*Math.sin((z+10)*.046)+.013*z}
-    function riverWidth(z){return 19+3.2*Math.sin(z*.057+.2)}
-    function bankX(z,side){return riverCenter(z)+side*riverWidth(z)}
-    // Low banks leave a clear channel through the lights toward the horizon.
-    for(const side of [-1,1]){
-      const pos=[],shades=[],idx=[];
-      for(let row=0;row<=225;row++){
-        const z=-270+row*1.7;
-        const crest=.85+.5*Math.sin(z*.18+side)+.19*Math.sin(z*.73);
-        for(const [offset,h,tint] of [[0,waterLevel-.15,'#030c16'],[1.2,.23,'#0a1926'],[3.4,crest,'#0e2431'],[23,crest+1.2,'#07141e']]){
-          pos.push(bankX(z,side)+side*offset,h,z);shades.push(...color(tint).toArray());
-        }
-        if(row<225)for(let j=0;j<3;j++){const n=row*4+j;idx.push(n,n+1,n+4,n+1,n+5,n+4)}
-      }
-      const g=new T.BufferGeometry();g.setIndex(idx);g.setAttribute('position',new T.Float32BufferAttribute(pos,3));
-      g.setAttribute('color',new T.Float32BufferAttribute(shades,3));
-      scene.add(reflected(new T.Mesh(g,new T.MeshBasicMaterial({vertexColors:true,side:T.DoubleSide}))));
-    }
+    const {center:riverCenter,bankX}=riverShore;
+    const shoreRandom=seedRandom();
+    const shore=riverShore.create(T,waterLevel,shoreRandom);
     // A reflected camera captures the actual lanterns and banks. The water samples
     // this view through moving ripples, breaking orange reflections into short strokes.
     const reflection=new T.WebGLRenderTarget(512,256,{minFilter:T.LinearFilter,magFilter:T.LinearFilter,format:T.RGBAFormat});
@@ -271,11 +256,13 @@
     const water=new T.Mesh(new T.PlaneGeometry(260,490),new T.ShaderMaterial({
       extensions:{derivatives:true},
       uniforms:{...photoUniforms,reflectionPixel:{value:reflectionPixel},poolProjection:{value:poolMatrix},reflectedView:{value:reflection.texture},projection:{value:reflectionMatrix},time:nightTime,
+        riverBankProfile:{value:shore.profile},
         portraitLight:{value:0},navy:{value:color('#020712')},teal:{value:color('#10515e')}},
       vertexShader:`uniform mat4 projection;varying vec4 reflected;varying vec3 world;
         void main(){vec4 p=modelMatrix*vec4(position,1.);world=p.xyz;reflected=projection*p;
         gl_Position=projectionMatrix*viewMatrix*p;}`,
       fragmentShader:`${samplePortrait}
+        ${riverShore.waterShader}
         uniform mat4 poolProjection;uniform sampler2D reflectedView;uniform float time,portraitLight;uniform vec3 navy,teal;
         uniform vec2 reflectionPixel;
         varying vec4 reflected;varying vec3 world;
@@ -322,6 +309,18 @@
                             *(.42+.58*smoothstep(-.55,.82,waveSlope));
           vec3 deepWater=navy+teal*(.020+.011*waveSlope)*exp(-.024*dist)+closeRipples;
           vec3 river=mix(deepWater,lights*stroke,fresnel)+vec3(1.,.52,.22)*warm*.11;
+          float bank=shoreDistance(p);
+          float shallow=1.-smoothstep(.0,1.55,bank);
+          float lapPhase=bank*11.+1.85*sin(p.y*1.44)-time*1.27;
+          float lap=sin(lapPhase)*(.58+.42*sin(p.y*.93+time*.18));
+          vec3 silt=vec3(.030,.038,.037)*(.78+.26*waveSlope);
+          river=mix(river,silt,shallow*(.43-.32*grazing));
+          river+=vec3(.024,.035,.044)*shallow*.23*smoothstep(.28,.99,lap)
+                 *(1.-smoothstep(.22,1.8,fwidth(lapPhase)));
+          float bankHaze=mix(.42,1.,1.-smoothstep(2.,19.,bank));
+          float haze=(1.-exp(-max(dist-10.,0.)*.019))*smoothstep(.70,.999,grazing)*bankHaze;
+          haze*=.79+.21*sin(p.y*.24+p.x*.21+time*.12+1.1*sin(p.x*.31));
+          river=mix(river,vec3(.042,.064,.093),haze*.43*(1.-still));
         if(still>.001){
           vec4 projected=poolProjection*vec4(world,1.);
           vec2 q=projected.xy/projected.w*.5+.5;
@@ -892,49 +891,25 @@
         };
       }
     }
-    // Tiered evergreens and a second, hazier tree line give the banks depth.
-    const crownProfile=[
-      [0,.55],[.29,.35],[.54,.09],[.71,-.20],[1,-.42],[.62,-.47],[0,-.42]
-    ].map(([radius,y])=>new T.Vector2(radius,y));
-    const crown=new T.LatheGeometry(crownProfile,11);
-    const vertices=crown.attributes.position;
-    for(let i=0;i<vertices.count;i++){
-      const x=vertices.getX(i),y=vertices.getY(i),z=vertices.getZ(i);
-      const angle=Math.atan2(z,x),jagged=1+.17*Math.sin(angle*5)+.08*Math.cos(angle*3+.8);
-      vertices.setXYZ(i,x*jagged+.16*(y+.50),y+.085*Math.sin(angle*4)*Math.hypot(x,z),z*jagged);
-    }
-    crown.computeVertexNormals();
-    const trunk=new T.CylinderGeometry(.07,.115,1,6);
-    const trunkMat=new T.MeshStandardMaterial({color:color('#202729'),roughness:1});
-    const treeMats=['#183544','#102a37','#132b35'].map(tint=>
-      new T.MeshStandardMaterial({color:color(tint),roughness:1,flatShading:true}));
-    for(const material of [trunkMat,...treeMats])material.onBeforeCompile=addRiverMist;
-    for(const side of [-1,1]){
-      for(let i=0;i<225;i++){
-        const z=-266+rand()*362,x=bankX(z,side)+side*(3+rand()*12);
-        const height=1.6+rand()**.78*7.6,radius=height*(.115+rand()*.10),spin=rand()*fullTurn;
-        const base=.8+.44*Math.sin(z*.18+side);
-        batch(trunk,trunkMat,x,base+height*.30,z,1,height*.6,1,spin);
-        for(let tier=0;tier<4;tier++){
-          const width=radius*(1-tier*.215);
-          batch(crown,treeMats[(i+tier)%3],x+Math.sin(spin)*tier*.08,base+height*(.34+tier*.144),
-            z,width,height*(.50-tier*.047),width*(.88+.23*Math.sin(spin)),spin+tier*.47);
-        }
-      }
-    }
+    riverShore.landscape(T,{
+      scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,slate:stonePores
+    });
 
     // Thousands of distant envelopes use one point draw per pass. Their real
     // positions also render into the river reflection, including on camera turns.
     const cloudPositions=[],cloudData=[];
-    for(let i=0;i<1150;i++){
+    for(let i=0;i<755;i++){
       const side=rand()<.63?-1:1;
       const upstream=rand()<.80;
       const z=upstream?-14-rand()*222:rand()*88-7;
-      const rising=rand()>.36;
-      const h=rising?1.3+39*Math.pow(rand(),2.2):.48+1.05*rand();
-      const x=bankX(z,side)+side*(.45+rand()*1.7)-h*(.13+.23*rand())+(rising?(rand()-.5)*(3.4+h*1.55):0);
+      const h=1.3+39*Math.pow(rand(),2.2);
+      const x=bankX(z,side)+side*(.45+rand()*1.7)-h*(.13+.23*rand())+(rand()-.5)*(3.4+h*1.55);
       cloudPositions.push(x,h,z);
-      cloudData.push(.17+Math.pow(rand(),2)*.49,rand()*fullTurn,rand(),rising?1:0);
+      cloudData.push(.17+Math.pow(rand(),2)*.49,rand()*fullTurn,rand(),1);
+    }
+    for(const {x,y,z,size} of shore.lanterns){
+      cloudPositions.push(x,y,z);
+      cloudData.push(size,shoreRandom()*fullTurn,shoreRandom(),0);
     }
     // A smaller release drifts across the channel rather than tracing a hard edge at the bank.
     for(let i=0;i<175;i++){
@@ -956,7 +931,8 @@
           p.z+=.85*sin(time*.12+lanternData.y);
           visibility=smoothstep(0.,1.1,rise)*(1.-smoothstep(37.,40.,rise))*.72;
         }
-        p.x+=.18*sin(time*.27+lanternData.y);p.y+=.25*sin(time*.31+lanternData.y);
+        p.x+=mix(.025,.18,lanternData.w)*sin(time*.27+lanternData.y);
+        p.y+=mix(.035,.25,lanternData.w)*sin(time*.31+lanternData.y);
         vec4 mv=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*mv;
         gl_PointSize=clamp(lanternData.x*viewportHeight*projectionMatrix[1][1]/max(1.,-mv.z),1.7,22.);
         visibility*=1.-.82*smoothstep(17.,116.,-mv.z);
@@ -1850,7 +1826,7 @@
       geo.computeVertexNormals();
       scene.add(reflected(new T.Mesh(geo,material)));
     }
-    deck(end[0],end[1],6.6,landingDepth,.34);
+    deck(end[0],end[1],landingWidth,landingDepth,.34);
     for(const side of [-1,1]){
       batch(cube,stone,end[0]+side*3.14,.18,end[1],.25,.55,4.6);
       blockWalking(end[0]+side*3.14,end[1],.25,4.6);

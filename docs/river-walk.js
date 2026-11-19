@@ -8,7 +8,7 @@ const riverWalk = (() => {
     {name:'Quiet hours', x:1, z:-72, width:9, depth:9, photos:[2,3]}
   ];
   const route=[],bridges=[],lanternSpans=[];
-  const width=3.14,approach=1.35,landingDepth=4.7;
+  const width=3.14,approach=1.35,landingWidth=6.6,landingDepth=4.7;
   function join(x,z,normal,neighbor){
     if(!neighbor)return {x,z,...normal};
     const scale=1/(1+normal.nx*neighbor.nx+normal.nz*neighbor.nz);
@@ -80,5 +80,5 @@ const riverWalk = (() => {
     const t=Math.max(0,Math.min(1,((x-b.sx)*dx+(z-b.sz)*dz)/(b.length*b.length)));
     return [b.sx+dx*t,b.sz+dz*t];
   }
-  return {rooms,bridges,route,trail,end,landingDepth,lanternSpans,bridgePoint,bridgeCenter,roomAt,walkable};
+  return {rooms,bridges,route,trail,end,landingWidth,landingDepth,lanternSpans,bridgePoint,bridgeCenter,roomAt,walkable};
 })();
