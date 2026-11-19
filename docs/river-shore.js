@@ -20,6 +20,15 @@ const riverShore = (() => {
     return deckEdges.every(edges=>edges.some(edge=>
       (x-edge.x)*edge.nx+(z-edge.z)*edge.nz>radius));
   }
+  function clearLanternFlight(x,z,radius,drift,sway,bottom,roofs){
+    return deckEdges.every((edges,i)=>{
+      const roof=roofs[i];
+      if(bottom>(roof?.top ?? 1))return true;
+      return edges.some(({x:edgeX,z:edgeZ,nx,nz})=>
+        (x-edgeX)*nx+(z-edgeZ)*nz >
+        radius+(roof?.overhang ?? 0)+Math.abs(drift.x*nx+drift.z*nz)+Math.abs(sway.x*nx+sway.z*nz));
+    });
+  }
   const center=z=>6.7*Math.sin((z+10)*.046)+.013*z;
   function bankX(z,side){
     const width=18.5+3.2*Math.sin(z*.057+.2);
@@ -34,6 +43,18 @@ const riverShore = (() => {
       setback=Math.max(setback,clearance*blend);
     }
     return bank+side*setback;
+  }
+  function channelBounds(z,reach){
+    const start=z-reach,end=z+reach;
+    let west=Math.max(bankX(start,-1),bankX(end,-1));
+    let east=Math.min(bankX(start,1),bankX(end,1));
+    // Include each terrain row the lantern can reach, even on a bend.
+    for(let row=Math.ceil((start-firstZ)/rowDepth);firstZ+row*rowDepth<end;row++){
+      const at=firstZ+row*rowDepth;
+      west=Math.max(west,bankX(at,-1));
+      east=Math.min(east,bankX(at,1));
+    }
+    return [west,east];
   }
   const waterShader=`
     uniform sampler2D riverBankProfile;
@@ -72,6 +93,7 @@ const riverShore = (() => {
     profile.minFilter=profile.magFilter=T.LinearFilter;
     profile.needsUpdate=true;
     const lanterns=[];
+    const lanternDrift=new T.Vector3(.32,.22,.27);
     const glowCanvas=document.createElement('canvas');
     glowCanvas.width=256;glowCanvas.height=1024;
     const ctx=glowCanvas.getContext('2d');
@@ -108,11 +130,26 @@ const riverShore = (() => {
         for(let i=0;i<count;i++){
           const pos=z+(random()-.5)*3.6,offset=.68+random()*2.35;
           const x=bankX(pos,side)+side*offset;
-          const lift=.32+random()*.63;
-          const size=.23+random()*.15;
-          if(!clearDecks(x,pos,size))continue;
-          lanterns.push({x,y:ground(pos,side,offset)+lift,z:pos,size});
-          const radius=1.54+lift*.83;
+          const lift=.34+random()*.63;
+          const size=.55+random()*.32;
+          const shellReach=size*.34+.04;
+          const reachX=shellReach+lanternDrift.x,reachZ=shellReach+lanternDrift.z;
+          if(!clearDecks(x,pos,Math.hypot(reachX,reachZ)))continue;
+          let y=ground(pos,side,offset)+lift;
+          for(let zStep=-2;zStep<=2;zStep++){
+            const sampleZ=pos+zStep*reachZ/2;
+            const sampleOffset=(x-bankX(sampleZ,side))*side;
+            for(const dx of [-reachX,0,reachX]){
+              y=Math.max(y,ground(sampleZ,side,sampleOffset+dx)+lanternDrift.y+.15);
+            }
+          }
+          const bounds=new T.Box3(
+            new T.Vector3(x-reachX,y-lanternDrift.y-.04,pos-reachZ),
+            new T.Vector3(x+reachX,y+lanternDrift.y+.70*size+.04,pos+reachZ)
+          );
+          if(lanterns.some(lamp=>lamp.bounds.intersectsBox(bounds)))continue;
+          lanterns.push({x,y,z:pos,size,bounds});
+          const radius=1.54+lift*.83+size*.25;
           const glow=ctx.createRadialGradient(x,pos,0,x,pos,radius);
           glow.addColorStop(0,'rgba(255,255,255,.68)');
           glow.addColorStop(.40,'rgba(255,255,255,.32)');
@@ -121,7 +158,7 @@ const riverShore = (() => {
         }
       }
     }
-    return {ground,height,lanterns,profile,glow:new T.CanvasTexture(glowCanvas)};
+    return {ground,height,lanterns,lanternDrift,profile,glow:new T.CanvasTexture(glowCanvas)};
   }
 
   function plantBuilder(T){
@@ -587,7 +624,7 @@ const riverShore = (() => {
       placement.updateMatrix();
       bounds.copy(geometry.boundingBox).applyMatrix4(placement.matrix);
       const radius=Math.hypot(Math.max(x-bounds.min.x,bounds.max.x-x),Math.max(z-bounds.min.z,bounds.max.z-z));
-      if(!clearDecks(x,z,radius+.10))return false;
+      if(!clearDecks(x,z,radius+.10) || shore.lanterns.some(lamp=>lamp.bounds.intersectsBox(bounds)))return false;
       batch(geometry,material,x,y,z,width,height,depth,spin,tilt);
       return true;
     }
@@ -692,5 +729,5 @@ const riverShore = (() => {
     }
   }
 
-  return {center,bankX,waterShader,mistShader,create,landscape};
+  return {center,bankX,channelBounds,clearLanternFlight,waterShader,mistShader,create,landscape};
 })();

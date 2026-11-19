@@ -1084,6 +1084,18 @@
       slate:stonePores,wood:photoMaterials.wood,foliage:photoMaterials.foliage,
       paintedStone:photoMaterials.paintedStone,forestFloor:photoMaterials.forestFloor,time:nightTime,moonDirection
     });
+    const bankShade=new T.LatheGeometry(shadeProfile.getPoints(16),20);
+    const bankHoop=new T.TorusGeometry(.158,.012,5,14).rotateX(Math.PI/2);
+    const bankLanterns=shore.lanterns.map(lamp=>({
+      ...lamp,phase:shoreRandom()*fullTurn,speed:.29+shoreRandom()*.16
+    }));
+    const bankMeshes=[[bankShade,paper],[bankHoop,bamboo]].map(([geometry,material])=>{
+      const mesh=new T.InstancedMesh(geometry,material,bankLanterns.length);
+      mesh.instanceMatrix.setUsage(T.DynamicDrawUsage);
+      mesh.frustumCulled=false;
+      scene.add(reflected(mesh));
+      return mesh;
+    });
 
     // Thousands of distant envelopes use one point draw per pass. Their real
     // positions also render into the river reflection, including on camera turns.
@@ -1095,34 +1107,33 @@
       const h=1.3+39*Math.pow(rand(),2.2);
       const x=bankX(z,side)+side*(.45+rand()*1.7)-h*(.13+.23*rand())+(rand()-.5)*(3.4+h*1.55);
       cloudPositions.push(x,h,z);
-      cloudData.push(.17+Math.pow(rand(),2)*.49,rand()*fullTurn,rand(),1);
-    }
-    for(const {x,y,z,size} of shore.lanterns){
-      cloudPositions.push(x,y,z);
-      cloudData.push(size,shoreRandom()*fullTurn,shoreRandom(),0);
+      cloudData.push(.17+Math.pow(rand(),2)*.49,rand()*fullTurn,rand());
     }
     // A smaller release drifts across the channel rather than tracing a hard edge at the bank.
     for(let i=0;i<175;i++){
       const h=5+35*rand(),z=-45-58*rand();
       cloudPositions.push(riverCenter(z)+(rand()-.5)*(12+h*.82),h,z);
-      cloudData.push(.13+.27*rand(),rand()*fullTurn,rand(),1);
+      cloudData.push(.13+.27*rand(),rand()*fullTurn,rand());
     }
     const cloudGeo=new T.BufferGeometry();
     cloudGeo.setAttribute('position',new T.Float32BufferAttribute(cloudPositions,3));
-    cloudGeo.setAttribute('lanternData',new T.Float32BufferAttribute(cloudData,4));
+    cloudGeo.setAttribute('lanternData',new T.Float32BufferAttribute(cloudData,3));
     const lightHeight={value:600};
+    const cloudHasShoreProfile=renderer.capabilities.vertexTextures;
     const cloudMaterial=new T.ShaderMaterial({
-      uniforms:{time:nightTime,viewportHeight:lightHeight},transparent:true,depthWrite:false,
-      vertexShader:`attribute vec4 lanternData;uniform float time,viewportHeight;varying float tint,visibility;
-        void main(){vec3 p=position;visibility=1.;
-        if(lanternData.w>.5){
-          float rise=mod(position.y-1.3+time*(.19+.09*lanternData.z),40.);
-          p.y=1.3+rise;p.x-=(p.y-position.y)*.31;
-          p.z+=.85*sin(time*.12+lanternData.y);
-          visibility=smoothstep(0.,1.1,rise)*(1.-smoothstep(37.,40.,rise))*.72;
-        }
-        p.x+=mix(.025,.18,lanternData.w)*sin(time*.27+lanternData.y);
-        p.y+=mix(.035,.25,lanternData.w)*sin(time*.31+lanternData.y);
+      uniforms:{time:nightTime,viewportHeight:lightHeight,riverBankProfile:{value:shore.profile}},
+      transparent:true,depthWrite:false,
+      vertexShader:`${cloudHasShoreProfile?riverShore.waterShader:''}
+        attribute vec3 lanternData;uniform float time,viewportHeight;varying float tint,visibility;
+        void main(){
+        vec3 p=position;
+        float rise=mod(position.y-1.3+time*(.19+.09*lanternData.z),40.);
+        p.x-=(1.3+rise-position.y)*.31;
+        p.z+=.85*sin(time*.12+lanternData.y);
+        p.x+=.18*sin(time*.27+lanternData.y);
+        float forest=${cloudHasShoreProfile?'1.-smoothstep(1.3,5.6,shoreDistance(p.xz))':'1.'};
+        p.y=6.2+12.*forest+rise+.25*sin(time*.31+lanternData.y);
+        visibility=smoothstep(0.,1.1,rise)*(1.-smoothstep(37.,40.,rise))*.72;
         vec4 mv=modelViewMatrix*vec4(p,1.);gl_Position=projectionMatrix*mv;
         gl_PointSize=clamp(lanternData.x*viewportHeight*projectionMatrix[1][1]/max(1.,-mv.z),1.7,22.);
         visibility*=1.-.82*smoothstep(17.,116.,-mv.z);
@@ -1137,7 +1148,9 @@
         #include <encodings_fragment>
         }`
     });
-    scene.add(reflected(new T.Points(cloudGeo,cloudMaterial)));
+    const skyLanternCloud=new T.Points(cloudGeo,cloudMaterial);
+    skyLanternCloud.frustumCulled=false;
+    scene.add(reflected(skyLanternCloud));
 
     const poolGeo=new T.PlaneGeometry(1,1);poolGeo.rotateX(-Math.PI/2);
     const contactMap=painted(64,(ctx,n)=>{
@@ -1643,6 +1656,11 @@
       [[-1,-.12],[-.28,.29],[.49,.77],[1,1.02]],
       Array.from({length:11},(_,i)=>{const x=i/5-1;return [x,.05+.82*Math.sqrt(1-x*x)]})
     ];
+    const roofOverhangs=[.42,.64,.63,.32,.53];
+    const lanternRoofs=profiles.map((profile,i)=>({
+      top:galleryHeights[i]+.35+Math.max(...profile.map(([,y])=>y)),
+      overhang:roofOverhangs[i]+.10
+    }));
     function galleryRoof(room,height,profile,roof,overhang){
       const {x,z,width,depth}=room;
       const half=width/2+overhang;
@@ -1759,7 +1777,7 @@
       const headerCenter=headerBottom+headerHeight/2;
       const hasEntryLattice=r===1 || r===3;
       const roof=r===1 || r===3?cedar:blueTiles;
-      galleryRoof(room,h,profiles[r],roof,[.42,.64,.63,.32,.53][r]);
+      galleryRoof(room,h,profiles[r],roof,roofOverhangs[r]);
       deck(x,z,w,d,.218,true);
       for(const side of [-1,1]){
         const wallX=x+side*wallReach;
@@ -2196,6 +2214,40 @@
       matrices.forEach((m,i)=>objects.setMatrixAt(i,m));objects.frustumCulled=false;scene.add(reflected(objects));
     }
 
+    function planLanternFlight(lamp,origin,drift,sway,drop){
+      const {x,y,z}=origin;
+      // Clear the whole swept envelope, including the paper rim when it tilts.
+      const radius=.34*lamp.size+.08;
+      const bottom=y-drop-.04*lamp.size;
+      const saveFlight=(x,y,drift,sway)=>{
+        const center=new T.Vector3(x,y,z);
+        lamp.x=x;lamp.y=y;lamp.z=z;
+        lamp.flight={center,drift,sway};
+      };
+      const waterLane=(drift,sway)=>{
+        const [west,east]=riverShore.channelBounds(z,radius+Math.abs(drift.z)+Math.abs(sway.z));
+        const margin=3.05+radius+Math.abs(drift.x)+Math.abs(sway.x);
+        return [west+margin,east-margin];
+      };
+      for(const scale of [1,.72,.45,.20]){
+        const scaledDrift=drift.clone().multiplyScalar(scale),scaledSway=sway.clone().multiplyScalar(scale);
+        const [west,east]=waterLane(scaledDrift,scaledSway);
+        const home=T.MathUtils.clamp(x,west,east);
+        for(let distance=0;distance<=Math.max(home-west,east-home)+.65;distance+=.65){
+          for(const candidate of [home-distance,home+distance]){
+            if(candidate<west || candidate>east)continue;
+            if(riverShore.clearLanternFlight(candidate,z,radius,scaledDrift,scaledSway,bottom,lanternRoofs)){
+              saveFlight(candidate,y,scaledDrift,scaledSway);
+              return;
+            }
+          }
+        }
+      }
+      const [west,east]=waterLane(drift,sway);
+      const aboveRoofs=Math.max(...lanternRoofs.map(roof=>roof.top))+.20+drop;
+      saveFlight(T.MathUtils.clamp(x,west,east),Math.max(y,aboveRoofs),drift,sway);
+    }
+
     // Lower lanterns drift beside the walk, close enough to watch their
     // reflections travel across the water from both banks of the boardwalk.
     lanternSpans.forEach(([[sx,sz],[ex,ez]],i)=>{
@@ -2203,16 +2255,19 @@
       const x=(sx+ex)/2,z=(sz+ez)/2;
       const lamp=lantern(x+side*7.4,1.65+(i%3)*.40,z,.81+(i%4)*.075);
       const galleryCrossings=rooms.length-1;
-      if(movingValues && (i<galleryCrossings || (i-galleryCrossings)%2===0)){
-        const span=bridges.find(b=>b.sx===sx && b.sz===sz);
-        const along=new T.Vector3(span.x-sx,0,span.z-sz).normalize();
+      if(i<galleryCrossings || (i-galleryCrossings)%2===0){
+        const first=bridges.findIndex(b=>b.sx===sx && b.sz===sz);
+        const span=bridges[first+(i<galleryCrossings?1:0)];
+        const along=new T.Vector3(span.x-span.sx,0,span.z-span.sz).normalize();
         const outward=new T.Vector3(-along.z,0,along.x).multiplyScalar(side);
-        const distance=span.length<2?span.length+.03:span.length*.48;
-        const center=new T.Vector3(sx,1.38,sz).addScaledVector(along,distance).addScaledVector(outward,2.38);
+        const center=new T.Vector3(span.sx,1.38-.31*lamp.size,span.sz)
+          .addScaledVector(along,span.length*.48).addScaledVector(outward,2.38);
+        planLanternFlight(lamp,center,outward.clone().multiplyScalar(.24),along.clone().multiplyScalar(-1.18),.13);
         const axis=outward.clone().multiplyScalar(-.82).addScaledVector(along,.10);
         axis.y=-.55;axis.normalize();
-        lamp.movingPath={center,axis,along,outward,phase:i*.53};
-        movingLanterns.push(lamp);
+        const lightCenter=lamp.flight.center.clone();lightCenter.y+=.31*lamp.size;
+        lamp.movingPath={center:lightCenter,axis,phase:i*.53};
+        if(movingValues)movingLanterns.push(lamp);
       }
       if(i%3===0)lantern(x-side*6.8,3.4,z-2.4,.87);
     });
@@ -2220,6 +2275,13 @@
     for(let i=0;i<44;i++){
       const angle=fullTurn*(i+rand()*.7)/44,dist=14+rand()*15;
       lantern(Math.sin(angle)*dist,4+rand()*7,-Math.cos(angle)*dist,.55+rand()*1.12);
+    }
+    const fixtureDrift=new T.Vector3(.12,0,0),fixtureSway=new T.Vector3(0,0,.078);
+    const floatingDrift=new T.Vector3(2.55,0,0),floatingSway=new T.Vector3(0,0,3.6);
+    for(const lamp of lanterns){
+      if(lamp.mountHeight || lamp.flight)continue;
+      if(lamp.fixture)planLanternFlight(lamp,lamp,fixtureDrift,fixtureSway,.17);
+      else planLanternFlight(lamp,lamp,floatingDrift,floatingSway,.83);
     }
     for(const {glass,side} of glazedFrames){
       const at=glass.position;
@@ -2270,25 +2332,36 @@
     function updateLanterns(time){
       nightTime.value=reduced.matches?0:time;
       const t=nightTime.value;
-      lanterns.forEach(({x,y,z,size,phase,glow,fixture,mountHeight,cordIndex,movingPath},i)=>{
+      const breeze=shore.lanternDrift;
+      bankLanterns.forEach(({x,y,z,size,phase,speed},i)=>{
+        const rise=t*speed+phase,sway=t*speed*.72+phase*1.7;
+        support.position.set(x+breeze.x*Math.sin(sway),y+breeze.y*Math.sin(rise),z+breeze.z*Math.cos(sway*.83));
+        support.rotation.set(.045*Math.cos(rise),phase+.14*Math.sin(sway),.065*Math.sin(sway));
+        support.scale.setScalar(size);support.updateMatrix();
+        for(const mesh of bankMeshes)mesh.setMatrixAt(i,support.matrix);
+      });
+      for(const mesh of bankMeshes)mesh.instanceMatrix.needsUpdate=true;
+      lanterns.forEach(({x,y,z,size,phase,glow,fixture,mountHeight,cordIndex,movingPath,flight},i)=>{
         const lift=Math.sin(t*.36+phase), drift=Math.sin(t*.21+phase*1.2);
-        if(movingEnabled && movingPath){
-          const {center,along,outward,phase:offset}=movingPath;
-          support.position.copy(center)
-            .addScaledVector(outward,.24*Math.sin(t*.54+offset))
-            .addScaledVector(along,-1.18*Math.sin(t*.62+offset));
-          support.position.y+=.13*Math.sin(t*.88+offset)-.31*size;
-        }else if(mountHeight){
+        if(mountHeight){
           support.position.set(x+.057*drift,y+.024*lift,z+.034*Math.cos(t*.24+phase));
-        }else if(fixture){
-          support.position.set(x+.12*drift,y+.17*lift,z+.078*Math.cos(t*.24+phase));
         }else{
-          const flight=t*(.14+.014*(i%5))+phase;
-          support.position.set(
-            x+2.55*Math.sin(flight),
-            y+.73*Math.sin(flight-.65)+.10*lift,
-            z+3.6*Math.cos(flight)
-          );
+          support.position.copy(flight.center);
+          if(movingPath){
+            const offset=movingPath.phase;
+            support.position.addScaledVector(flight.drift,Math.sin(t*.54+offset))
+              .addScaledVector(flight.sway,Math.sin(t*.62+offset));
+            support.position.y+=.13*Math.sin(t*.88+offset);
+          }else if(fixture){
+            support.position.addScaledVector(flight.drift,drift)
+              .addScaledVector(flight.sway,Math.cos(t*.24+phase));
+            support.position.y+=.17*lift;
+          }else{
+            const angle=t*(.14+.014*(i%5))+phase;
+            support.position.addScaledVector(flight.drift,Math.sin(angle))
+              .addScaledVector(flight.sway,Math.cos(angle));
+            support.position.y+=.73*Math.sin(angle-.65)+.10*lift;
+          }
         }
         support.rotation.set(.04*lift,phase+.12*drift,.07*drift);
         support.scale.setScalar(size);support.updateMatrix();
