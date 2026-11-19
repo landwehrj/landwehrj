@@ -117,7 +117,7 @@
     };
   }
 
-  function makeGarden(atlas) {
+  function makeGarden(atlas,photoMaterials) {
     const T = THREE, rand = seedRandom();
     const renderer = new T.WebGLRenderer({antialias:true, alpha:false, powerPreference:'default'});
     renderer.setPixelRatio(Math.min(devicePixelRatio,1.6));
@@ -318,8 +318,8 @@
           vec3 skyHalfway=normalize(normalize(ray)+normalize(vec3(-.42,.48,.77)));
           float skySheen=pow(max(0.,dot(rippleNormal,skyHalfway)),20.);
           float nearby=(1.-smoothstep(8.,28.,dist))*(1.-.80*still);
-          vec3 closeRipples=vec3(.009,.018,.032)*nearby*(.12+.72*skySheen)
-                            *(.46+.54*smoothstep(-.55,.82,waveSlope));
+          vec3 closeRipples=vec3(.016,.030,.054)*nearby*(.24+.72*skySheen)
+                            *(.42+.58*smoothstep(-.55,.82,waveSlope));
           vec3 deepWater=navy+teal*(.020+.011*waveSlope)*exp(-.024*dist)+closeRipples;
           vec3 river=mix(deepWater,lights*stroke,fresnel)+vec3(1.,.52,.22)*warm*.11;
         if(still>.001){
@@ -373,7 +373,7 @@
       }
     });
     limestone.wrapS=limestone.wrapT=T.RepeatWrapping;
-    const stonePores=painted(256,(ctx,n)=>{
+    const stonePores=photoMaterials.slate||painted(256,(ctx,n)=>{
       const random=seedRandom();
       // Red stores surface height and green stores the finish.
       ctx.fillStyle='#a3a000';ctx.fillRect(0,0,n,n);
@@ -394,10 +394,9 @@
     stonePores.encoding=T.LinearEncoding;
     stonePores.wrapS=stonePores.wrapT=T.RepeatWrapping;
     stonePores.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
-    const stone = new T.MeshStandardMaterial({map:limestone,color:color('#89939e'),roughness:.86});
-    const edge = new T.MeshStandardMaterial({map:limestone,color:color('#849fa8'),roughness:.49});
+    const stone = new T.MeshStandardMaterial({map:limestone,color:color('#697685'),roughness:.83});
+    const edge = new T.MeshStandardMaterial({map:limestone,color:color('#84919c'),roughness:.66});
     const bronze = new T.MeshStandardMaterial({color:color('#bc9b71'),roughness:.43,metalness:.28});
-    const plinth = new T.MeshStandardMaterial({color:color('#44535a'),roughness:.95});
     const linen = new T.MeshStandardMaterial({color:color('#c4b7a5'),roughness:1});
     const pictureMetal=new T.MeshStandardMaterial({color:color('#62503d'),roughness:.49,metalness:.38});
     const pictureBulb=new T.MeshBasicMaterial({color:color('#ffd490')});
@@ -546,6 +545,57 @@
     function shadowVariant(mode=shadowValues?.riverShadowMode.value ?? 0){
       return mode===0?'off':'map';
     }
+    function finishRailing(shader,finish){
+      const axes=finish.horizontal?'xzy':'xyz';
+      const varyings='varying vec4 railPosition;\nvarying vec3 railNormal;\n';
+      shader.uniforms.railFinishMap={value:finish.map};
+      shader.vertexShader=varyings+shader.vertexShader.replace('#include <begin_vertex>',`
+        #include <begin_vertex>
+        vec3 railScale=vec3(1.0);
+        #ifdef USE_INSTANCING
+          railScale=vec3(length(instanceMatrix[0].xyz),length(instanceMatrix[1].xyz),length(instanceMatrix[2].xyz));
+        #endif
+        railPosition=vec4((position*railScale).${axes},railScale.z*.5);
+        railNormal=normal.${axes};
+      `);
+      shader.fragmentShader=varyings+'uniform sampler2D railFinishMap;\n'+shader.fragmentShader
+        .replace('#include <color_fragment>',`
+          #include <color_fragment>
+          vec3 railAxis=abs(normalize(railNormal));
+          vec3 railBlend=pow(railAxis,vec3(8.));
+          railBlend/=dot(railBlend,vec3(1.));
+          vec3 railUV=railPosition.xyz*${finish.scale};
+          vec3 finishGrain=texture2D(railFinishMap,railUV.zy).rgb*railBlend.x
+                          +texture2D(railFinishMap,railUV.xz).rgb*railBlend.y
+                          +texture2D(railFinishMap,railUV.xy).rgb*railBlend.z;
+          float bevelWear=smoothstep(.05,.24,1.-max(railAxis.x,max(railAxis.y,railAxis.z)));
+          bevelWear*=mix(.48,1.,smoothstep(.33,.73,finishGrain.g));
+          diffuseColor.rgb*=mix(.65,1.28,finishGrain.b)*(1.+bevelWear*${finish.wear});
+          ${finish.patina?`
+          float oxidation=(1.-bevelWear)*smoothstep(.43,.64,finishGrain.r)*.64;
+          diffuseColor.rgb*=mix(vec3(1.),vec3(.43,.32,.25),oxidation);
+          `:''}
+          ${finish.groundContact?`
+          float postGround=1.-smoothstep(.006,.133,abs(riverSurface.y));
+          diffuseColor.rgb*=1.-.20*postGround;
+          `:''}
+          ${finish.horizontal?'diffuseColor.rgb*=mix(.83,1.,smoothstep(.009,.067,railPosition.w-abs(railPosition.y)));':''}
+        `)
+        .replace('#include <roughnessmap_fragment>',`
+          #include <roughnessmap_fragment>
+          roughnessFactor=clamp(roughnessFactor+(finishGrain.g-.5)*.34-bevelWear*.12,.27,.89);
+          ${finish.groundContact?'roughnessFactor+=.065*postGround;':''}
+        `)
+        .replace('#include <normal_fragment_maps>',`
+          #include <normal_fragment_maps>
+          vec3 railDx=dFdx(-vViewPosition),railDy=dFdy(-vViewPosition);
+          vec3 railTx=cross(railDy,normal),railTy=cross(normal,railDx);
+          float railDet=dot(railDx,railTx);
+          float railRelief=finishGrain.r*${finish.relief};
+          vec3 railSlope=sign(railDet)*(railTx*dFdx(railRelief)+railTy*dFdy(railRelief));
+          normal=normalize(max(abs(railDet),1e-7)*normal-railSlope);
+        `);
+    }
     function lightArchitecture(materials){
       // Each strip of the river knows every lamp that can reach it. Picking
       // lights at the surface keeps the galleries lit from every viewpoint.
@@ -578,8 +628,12 @@
         const isStone=material.map===limestone;
         const isCap=material===edge;
         const isPrint=material===photoMat,isMat=material===linen,isDeck=material===timber;
-        const profile=isStone?'stone':isPrint?'print':isMat?'mat':isDeck?'deck':'lanterns';
-        material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant()+(movingEnabled?'-moving':'');
+        const railFinish=railingFinishes.get(material);
+        const isDeckTrim=material===headerPlank || material===walkwayTrim;
+        const exterior=isStone || isDeck || railFinish || isDeckTrim;
+        const profile=isStone?'stone':isPrint?'print':isMat?'mat':isDeck?'deck':isDeckTrim?'deck-trim':'lanterns';
+        material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant()+(movingEnabled?'-moving':'')
+          +(railFinish?'-railing-'+material.id:exterior?'-exterior':'');
         material.onBeforeCompile=shader=>{
           const variant=shadowVariant(),castShadows=variant!=='off';
           addRiverMist(shader);
@@ -651,6 +705,11 @@
                 RE_Direct(directLight,geometry,material,reflectedLight);
               }
             }`:''}
+            ${exterior?`
+            vec3 surfaceUp=inverseTransformDirection(geometryNormal,viewMatrix);
+            float exposed=clamp(.5+.5*surfaceUp.y,0.,1.);
+            irradiance+=mix(vec3(.022,.029,.042),vec3(.38,.465,.55),exposed);
+            `:''}
             // Approximate how the floor, low walls and eaves mask indirect light
             // where they meet. The doorway stays open to the sky.
             for(int gallery=0;gallery<${rooms.length};gallery++){
@@ -685,7 +744,7 @@
             diffuseColor.rgb*=mix(vec3(1.),vec3(.56,.66,.73),wetness);
           `).replace('#include <roughnessmap_fragment>',`
             #include <roughnessmap_fragment>
-            roughnessFactor=mix(roughnessFactor,.31,wetness*.74);
+            roughnessFactor=mix(roughnessFactor,${isStone?'.39':'.31'},wetness*.74);
           `);
           if(castShadows)riverShadows.receive(T,shader,shadowValues,rooms.length);
           if(isPrint || isMat){
@@ -707,16 +766,76 @@
             `);
           }
           if(isDeck){
-            shader.fragmentShader=shader.fragmentShader.replace('#include <roughnessmap_fragment>',`
-              #include <roughnessmap_fragment>
+            shader.uniforms.boardGrainMap={value:railGrain};
+            const across='varying float timberAcross;\n';
+            shader.vertexShader=across+`
+              #ifndef USE_INSTANCING
+                attribute float boardAcross;
+              #endif
+            `+shader.vertexShader.replace('#include <begin_vertex>',`
+              #include <begin_vertex>
+              #ifdef USE_INSTANCING
+                timberAcross=position.x+.5;
+              #else
+                timberAcross=boardAcross;
+              #endif
+            `);
+            shader.fragmentShader=across+'uniform sampler2D boardGrainMap;\n'+shader.fragmentShader.replace('#include <color_fragment>',`
+              #include <color_fragment>
               // Canvas row zero is at the top. Match the staggered joints in the wood maps.
               float plankRow=floor((1.-vUv.y)*${plankRows.toFixed(1)});
               float rowInTile=mod(plankRow,${plankRows.toFixed(1)});
               float joint=.13+.74*mod(rowInTile*7.,${plankRows.toFixed(1)})/${(plankRows-1).toFixed(1)};
               float board=floor(vUv.x-joint);
-              float finish=fract(sin(dot(vec2(board,plankRow),vec2(127.1,311.7)))*43758.5453)-.5;
+              float plankVariance=fract(sin(dot(vec2(board,plankRow),vec2(127.1,311.7)))*43758.5453)-.5;
               float detail=1.-smoothstep(.28,1.,max(fwidth(vUv.x),fwidth(vUv.y)*${plankRows.toFixed(1)}));
-              roughnessFactor=clamp(roughnessFactor+.19*finish*detail,.29,1.);
+              float dampEdge=smoothstep(.58,.98,abs(timberAcross*2.-1.));
+              vec3 boardGrain=texture2D(boardGrainMap,vec2(vUv.y*11.3+plankVariance*.21,vUv.x*1.72)).rgb;
+              diffuseColor.rgb*=(1.+.12*plankVariance*detail)*(1.-.09*dampEdge)
+                               *mix(.81,1.18,smoothstep(.14,.79,boardGrain.b));
+            `).replace('#include <roughnessmap_fragment>',`
+              #include <roughnessmap_fragment>
+              roughnessFactor=clamp(.66+(.45*(roughnessFactor-.62))+.15*plankVariance*detail
+                                    +.32*(boardGrain.g-.56)-.13*dampEdge,.43,.91);
+            `).replace('#include <normal_fragment_maps>',`
+              #include <normal_fragment_maps>
+              vec3 boardDx=dFdx(-vViewPosition),boardDy=dFdy(-vViewPosition);
+              vec3 boardTx=cross(boardDy,normal),boardTy=cross(normal,boardDx);
+              float boardDet=dot(boardDx,boardTx),boardRelief=.0058*boardGrain.r;
+              vec3 boardSlope=sign(boardDet)*(boardTx*dFdx(boardRelief)+boardTy*dFdy(boardRelief));
+              normal=normalize(max(abs(boardDet),1e-7)*normal-boardSlope);
+            `);
+          }
+          if(isDeckTrim){
+            shader.uniforms.boardGrainMap={value:railGrain};
+            const sizeVarying='varying vec2 trimSize;\n';
+            shader.vertexShader=sizeVarying+'attribute vec2 trimDimensions;\n'+shader.vertexShader.replace(
+              '#include <begin_vertex>',`
+                #include <begin_vertex>
+                trimSize=trimDimensions;
+              `);
+            shader.fragmentShader=sizeVarying+'uniform sampler2D boardGrainMap;\n'
+              +shader.fragmentShader.replace('#include <map_fragment>',`
+              // Sample inside a deck board, skipping its seams and nails.
+              // Mirror the length so long trim boards can use the same grain.
+              vec2 trimMeters=vUv*trimSize;
+              float trimRun=trimMeters.y/${(plankLength*1.52).toFixed(3)};
+              float trimLength=abs(2.*fract(trimRun+.5)-1.);
+              float trimAcross=.5+(vUv.x-.5)*min(trimSize.x/${plankWidth.toFixed(2)},1.)*.82;
+              vec2 trimUV=vec2(.17+.76*trimLength,1.-trimAcross/${plankRows.toFixed(1)});
+              vec3 trimGrain=texture2D(boardGrainMap,trimMeters*vec2(3.14,.91)).rgb;
+              vec2 seamDistance=min(trimMeters,trimSize-trimMeters);
+              float edgeDistance=min(seamDistance.x,seamDistance.y);
+              float seam=smoothstep(0.,.005,edgeDistance+fwidth(edgeDistance)*.4);
+              diffuseColor*=mapTexelToLinear(texture2D(map,trimUV));
+              diffuseColor.rgb*=mix(.81,1.18,smoothstep(.14,.79,trimGrain.b))*mix(.74,1.,seam);
+            `).replace('#include <roughnessmap_fragment>',`
+              float trimFinish=roughness*texture2D(roughnessMap,trimUV).g;
+              float roughnessFactor=clamp(.66+.45*(trimFinish-.62)+.32*(trimGrain.g-.56),.43,.91);
+              roughnessFactor=mix(roughnessFactor,.31,wetness*.74);
+            `).replace('#include <normal_fragment_maps>',`
+              float trimRelief=bumpScale*texture2D(bumpMap,trimUV).r+.0058*trimGrain.r;
+              normal=perturbNormalArb(-vViewPosition,normal,vec2(dFdx(trimRelief),dFdy(trimRelief)),faceDirection);
             `);
           }
           if(isStone){
@@ -733,24 +852,41 @@
               vec4 grain=texture2D(map,grainUV.zy)*stoneWeight.x
                         +texture2D(map,grainUV.xz)*stoneWeight.y
                         +texture2D(map,grainUV.xy)*stoneWeight.z;
-              vec3 poresUV=riverSurface*2.75;
-              vec2 pores=texture2D(riverStonePores,poresUV.zy).rg*stoneWeight.x
-                        +texture2D(riverStonePores,poresUV.xz).rg*stoneWeight.y
-                        +texture2D(riverStonePores,poresUV.xy).rg*stoneWeight.z;
+              vec3 poresUV=riverSurface*${photoMaterials.slate?'2.65':'5.1'};
+              vec3 pores=texture2D(riverStonePores,poresUV.zy).rgb*stoneWeight.x
+                        +texture2D(riverStonePores,poresUV.xz).rgb*stoneWeight.y
+                        +texture2D(riverStonePores,poresUV.xy).rgb*stoneWeight.z;
               float worn=smoothstep(.12,.69,stoneAxis.y)*(1.-smoothstep(.94,.999,stoneAxis.y));
-              diffuseColor.rgb*=mapTexelToLinear(grain).rgb*(1.+worn*riverEdgeWear);
+              float mottle=${photoMaterials.slate?'smoothstep(.16,.70,pores.b)':'smoothstep(.33,.77,grain.g)'};
+              float atStoneFoot=1.-smoothstep(.008,.14,abs(riverSurface.y));
+              diffuseColor.rgb*=mapTexelToLinear(grain).rgb*mix(vec3(.72,.78,.86),vec3(1.32,1.33,1.36),mottle)
+                               *(1.+worn*riverEdgeWear)*(1.-.19*atStoneFoot);
             `).replace('#include <roughnessmap_fragment>',`
               #include <roughnessmap_fragment>
-              roughnessFactor=clamp(roughnessFactor+(.73-grain.g)*.30+(pores.g-.63)*.23-worn*.16,.34,1.);
+              roughnessFactor=clamp(roughnessFactor+(.64-grain.g)*.25+(pores.g-.60)*.30-worn*.095,.51,.96);
             `).replace('#include <normal_fragment_maps>',`
               #include <normal_fragment_maps>
               // A small amount of relief follows the same unstretched projection.
               vec3 stoneDx=dFdx(-vViewPosition),stoneDy=dFdy(-vViewPosition);
               vec3 stoneTx=cross(stoneDy,normal),stoneTy=cross(normal,stoneDx);
               float stoneDet=dot(stoneDx,stoneTx);
-              float stoneHeight=.0028*grain.g+.00125*pores.r;
+              float stoneHeight=.0023*grain.g+${photoMaterials.slate?'.0068':'.00078'}*pores.r;
               vec3 microRelief=sign(stoneDet)*(stoneTx*dFdx(stoneHeight)+stoneTy*dFdy(stoneHeight));
               normal=normalize(max(abs(stoneDet),1e-7)*normal-microRelief);
+            `);
+          }
+          if(railFinish)finishRailing(shader,railFinish);
+          if(exterior){
+            shader.fragmentShader=shader.fragmentShader.replace('#include <lights_fragment_maps>',`
+              #include <lights_fragment_maps>
+              // Broad, cool sky reflection for the horizontal surfaces by the river.
+              vec3 skyRay=inverseTransformDirection(reflect(-geometry.viewDir,geometry.normal),viewMatrix);
+              float openSky=smoothstep(-.14,.78,skyRay.y);
+              float skyLobe=pow(max(dot(skyRay,normalize(vec3(-.43,.72,.43))),0.),mix(8.,2.,roughnessFactor));
+              float facing=clamp(dot(geometry.normal,geometry.viewDir),0.,1.);
+              vec3 fresnel=mix(material.specularColor,vec3(1.),pow(1.-facing,5.)*.34);
+              reflectedLight.indirectSpecular+=fresnel*(vec3(.012,.020,.035)
+                +openSky*vec3(.053,.079,.119)+skyLobe*vec3(.15,.205,.275));
             `);
           }
         };
@@ -894,15 +1030,25 @@
       .13+.74*((i*7)%plankRows)/(plankRows-1));
     const timberMap=painted(1024,(ctx,n)=>{
       const pitch=n/plankRows;
+      const scannedRows=[70,195,310,432,535,650,766,868,976];
+      const deckPhoto=photoMaterials.deck?.image;
       for(let i=0;i<plankRows;i++){
         const z=i*pitch,joint=n*plankJoints[i];
         ctx.fillStyle=['#8c8377','#9a8f7d','#8a857b','#a19985','#807f75'][i%5];
         ctx.fillRect(0,z,n,pitch);
+        if(deckPhoto){
+          // Sample the interiors of the scanned boards so only the layout below creates seams.
+          const sourceY=scannedRows[(i*5)%scannedRows.length]-32;
+          ctx.globalAlpha=.91;
+          for(const start of [joint-n,joint])ctx.drawImage(deckPhoto,0,sourceY,1024,64,start,z,n,pitch);
+          ctx.globalAlpha=1;
+        }
         ctx.fillStyle='#4d443a';ctx.fillRect(0,z,n,1.35);
         ctx.fillStyle='#d4c3a933';ctx.fillRect(0,z+1.35,n,.65);
+        ctx.globalAlpha=deckPhoto ? .32 : 1;
         for(let j=0;j<115;j++){
           const x=rand()*n,y=z+3+rand()*(pitch-4),length=4+rand()*160;
-          ctx.strokeStyle=j%3?'#493d321f':'#e9d8b523';ctx.lineWidth=.36+rand()*.68;
+          ctx.strokeStyle=j%3?'#493d3238':'#e9d8b536';ctx.lineWidth=.36+rand()*.68;
           const bend=rand()*2-1;
           ctx.beginPath();
           for(const start of x+length>=n?[x,x-n]:[x]){
@@ -911,6 +1057,7 @@
           }
           ctx.stroke();
         }
+        ctx.globalAlpha=1;
         ctx.fillStyle='#4d443a';ctx.fillRect(joint-.76,z+1.35,1.52,pitch-1.35);
         ctx.fillStyle='#d4c3a943';ctx.fillRect(joint+.76,z+1.75,.75,pitch-2.15);
         ctx.fillStyle='#453c3590';
@@ -921,6 +1068,7 @@
       }
     });
     const plankHeight=painted(512,(ctx,n)=>{
+      const grainRandom=seedRandom();
       const pitch=n/plankRows;
       for(let i=0;i<plankRows;i++){
         const z=i*pitch,joint=n*plankJoints[i];
@@ -928,6 +1076,18 @@
         profile.addColorStop(0,'#7f7f7f');profile.addColorStop(.075,'#a5a5a5');
         profile.addColorStop(.925,'#a5a5a5');profile.addColorStop(1,'#7f7f7f');
         ctx.fillStyle=profile;ctx.fillRect(0,z,n,pitch+.2);
+        for(let line=0;line<62;line++){
+          const x=grainRandom()*n,y=z+2+grainRandom()*(pitch-4);
+          const length=10+grainRandom()*118,bend=grainRandom()*.86-.43;
+          ctx.strokeStyle=line%4?'#68686858':'#e5e5e556';
+          ctx.lineWidth=.34+grainRandom()*.53;
+          ctx.beginPath();
+          for(const start of x+length>=n?[x,x-n]:[x]){
+            ctx.moveTo(start,y);
+            ctx.quadraticCurveTo(start+length*.54,y+bend,start+length,y+.15);
+          }
+          ctx.stroke();
+        }
         ctx.fillStyle='#898989';ctx.fillRect(joint-.55,z+1,1.1,pitch-2);
       }
     });
@@ -985,17 +1145,29 @@
     });
     timberMap.wrapS=timberMap.wrapT=T.RepeatWrapping;
     const deckGeometries=new Map();
-    function deck(x,z,width,depth,thickness){
-      const dimensions=width+'x'+depth;
+    const deckBorderWidth=.19,stripBatches=new Map();
+    const boxPositions=cube.getAttribute('position'),boxUVs=cube.getAttribute('uv');
+    function deck(x,z,width,depth,thickness,framed=false){
+      const inset=framed?deckBorderWidth:0;
+      const boardWidth=width-2*inset,boardDepth=depth-2*inset;
+      const dimensions=boardWidth+'x'+boardDepth;
       if(!deckGeometries.has(dimensions)){
         const geometry=cube.clone();
         const uv=geometry.getAttribute('uv'),normal=geometry.getAttribute('normal');
         for(let i=0;i<uv.count;i++){
-          if(normal.getY(i)!==0)uv.setXY(i,uv.getX(i)*width/plankLength,uv.getY(i)*depth/plankRepeatLength);
+          if(normal.getY(i)!==0)uv.setXY(i,uv.getX(i)*boardWidth/plankLength,uv.getY(i)*boardDepth/plankRepeatLength);
         }
         deckGeometries.set(dimensions,geometry);
       }
-      batch(deckGeometries.get(dimensions),timber,x,-thickness/2,z,width,thickness,depth);
+      batch(deckGeometries.get(dimensions),timber,x,-thickness/2,z,boardWidth,thickness,boardDepth);
+      if(!framed)return;
+      const halfX=(width-inset)/2,halfZ=(depth-inset)/2;
+      const corners=[[-1,-1],[1,-1],[1,1],[-1,1]].map(([nx,nz])=>({x:x+nx*halfX,z:z+nz*halfZ,nx,nz}));
+      corners.forEach((start,i)=>{
+        const finish=corners[(i+1)%4],dx=finish.x-start.x,dz=finish.z-start.z;
+        const length=Math.hypot(dx,dz);
+        deckEdgeBoards(start,finish,{nx:dz/length,nz:-dx/length},thickness,inset);
+      });
     }
     const tiles=painted(256,(ctx,n)=>{
       for(let i=0;i<7;i++)for(let j=-1;j<6;j++){
@@ -1017,10 +1189,63 @@
     const uprightCedar=cedar.clone();
     uprightCedar.bumpScale=.014;
     uprightCedar.roughness=.73;
-    const walkwayTrim=cedar.clone();
-    walkwayTrim.color.copy(color('#a19888'));
-    walkwayTrim.roughness=.88;
-    const railCap=new T.MeshStandardMaterial({color:color('#c18b54'),roughness:.41,metalness:.2});
+    const railWood=new T.MeshStandardMaterial({color:color('#805743'),roughness:.54});
+    const plinth=new T.MeshStandardMaterial({color:color('#35434f'),roughness:.69,vertexColors:true});
+    const railCap=new T.MeshStandardMaterial({color:color('#a88b63'),roughness:.40,metalness:1});
+    const lowerRail=new T.MeshStandardMaterial({color:color('#725543'),roughness:.62});
+    const railFoot=new T.MeshStandardMaterial({color:color('#5b6269'),roughness:.46,metalness:.62});
+    const railGrain=photoMaterials.wood||painted(512,(ctx,n)=>{
+      const random=seedRandom();
+      ctx.fillStyle='#9796a1';ctx.fillRect(0,0,n,n);
+      for(let i=0;i<300;i++){
+        const x=random()*n,phase=random()*fullTurn;
+        const arc=3+random()*14;
+        ctx.lineWidth=i<60?3+random()*9:.6+random()*2.4;
+        ctx.strokeStyle=i<60
+          ?(i%3?'#547b4f7a':'#beb9d48c')
+          :(i%3?'#5260586b':'#c5aeb35d');
+        ctx.beginPath();
+        for(let y=-16;y<=n+16;y+=8){
+          const turn=y/n*fullTurn;
+          const u=x+arc*Math.sin(turn+phase)+2.4*Math.sin(turn*3+phase*.4);
+          if(y===-16)ctx.moveTo(u,y);else ctx.lineTo(u,y);
+        }
+        ctx.stroke();
+      }
+    });
+    const castFinish=painted(256,(ctx,n)=>{
+      const random=seedRandom();
+      ctx.fillStyle='#8b8897';ctx.fillRect(0,0,n,n);
+      for(let i=0;i<190;i++){
+        const x=random()*n,y=random()*n,r=3+random()*17;
+        const patina=ctx.createRadialGradient(x,y,0,x,y,r);
+        patina.addColorStop(0,i%3?'#58706459':'#b5a6ae6a');
+        patina.addColorStop(1,'#78879700');
+        ctx.fillStyle=patina;ctx.fillRect(x-r,y-r,2*r,2*r);
+      }
+      for(let i=0;i<1900;i++){
+        const x=random()*n,y=random()*n;
+        ctx.fillStyle=i%4?'#4b9a8d42':'#d6aab568';
+        ctx.fillRect(x,y,.45+random()*.9,1.5+random()*7);
+      }
+    });
+    for(const texture of [railGrain,castFinish]){
+      texture.encoding=T.LinearEncoding;
+      texture.wrapS=texture.wrapT=T.RepeatWrapping;
+      texture.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+      texture.needsUpdate=true;
+    }
+    const walkwayTrim=timber.clone();
+    walkwayTrim.color.copy(color('#afaaa1'));
+    const headerPlank=timber.clone();
+    headerPlank.color.copy(color('#b3aea5'));
+    const railingFinishes=new Map([
+      [railWood,{map:railGrain,horizontal:true,scale:'vec3(3.7,.65,3.7)',wear:'.18',relief:'.00094'}],
+      [plinth,{map:railGrain,scale:'vec3(4.2,1.05,4.2)',wear:'.25',relief:'.00120',groundContact:true}],
+      [railCap,{map:castFinish,scale:'vec3(4.6)',wear:'.32',relief:'.00062',patina:true}],
+      [lowerRail,{map:railGrain,horizontal:true,scale:'vec3(4.5,.86,4.5)',wear:'.15',relief:'.00072'}],
+      [railFoot,{map:castFinish,scale:'vec3(5.8)',wear:'.28',relief:'.00076',groundContact:true}]
+    ]);
     function chamferedBlock(radius){
       const half=.5-radius;
       const shape=new T.Shape();
@@ -1035,6 +1260,40 @@
       return geometry;
     }
     const beam=chamferedBlock(.063), trim=chamferedBlock(.035);
+    // Mill the long edges while leaving full-width end faces for the joints.
+    const timberSection=new T.Shape();
+    timberSection.moveTo(-.5,-.452);
+    for(const [x,y] of [[-.452,-.5],[.452,-.5],[.5,-.452],[.5,.452],
+      [.452,.5],[-.452,.5],[-.5,.452]])timberSection.lineTo(x,y);
+    timberSection.closePath();
+    const ceilingTimber=new T.ExtrudeGeometry(timberSection,{depth:1,bevelEnabled:false});
+    ceilingTimber.translate(0,0,-.5);
+    const braceTimber=ceilingTimber.clone().rotateY(Math.PI/2);
+    const handrailSection=new T.Shape();
+    const corner=.15,flat=.5-corner;
+    handrailSection.moveTo(-flat,-.5);
+    handrailSection.lineTo(flat,-.5);
+    handrailSection.quadraticCurveTo(.5,-.5,.5,-flat);
+    handrailSection.lineTo(.5,flat);
+    handrailSection.quadraticCurveTo(.5,.5,flat,.5);
+    handrailSection.lineTo(-flat,.5);
+    handrailSection.quadraticCurveTo(-.5,.5,-.5,flat);
+    handrailSection.lineTo(-.5,-flat);
+    handrailSection.quadraticCurveTo(-.5,-.5,-flat,-.5);
+    handrailSection.closePath();
+    const handrailGeometry=new T.ExtrudeGeometry(handrailSection,{
+      depth:1,bevelEnabled:false,curveSegments:5
+    });
+    handrailGeometry.translate(0,0,-.5);
+    const railVertices=handrailGeometry.getAttribute('position');
+    const railNormals=handrailGeometry.getAttribute('normal');
+    for(let i=0;i<railVertices.count;i++){
+      if(Math.abs(railNormals.getZ(i))>.1)continue;
+      const x=railVertices.getX(i),y=railVertices.getY(i);
+      const nx=x-T.MathUtils.clamp(x,-flat,flat),ny=y-T.MathUtils.clamp(y,-flat,flat);
+      const length=Math.hypot(nx,ny);
+      railNormals.setXYZ(i,nx/length,ny/length,0);
+    }
     function roundedStone(rx,ry,rz){
       const geometry=new T.BoxGeometry(1,1,1,5,5,5);
       const position=geometry.getAttribute('position'),normal=geometry.getAttribute('normal');
@@ -1058,8 +1317,9 @@
     const wallBlock=roundedStone(.009,.019,.028);
     const wallCap=roundedStone(.013,.15,.032);
     const capBlock=roundedStone(.032,.15,.032);
-    const plaster=new T.MeshStandardMaterial({map:limestone,color:color('#76858e'),roughness:.78});
-    const mortar=new T.MeshStandardMaterial({color:color('#465162'),roughness:.91});
+    const railingBlock=chamferedBlock(.069);
+    const plaster=new T.MeshStandardMaterial({map:limestone,color:color('#65717e'),roughness:.80});
+    const mortar=new T.MeshStandardMaterial({color:color('#262e38'),roughness:.94});
     const darkTimber=new T.MeshStandardMaterial({
       map:cedarMap,bumpMap:cedarMap,bumpScale:.015,roughnessMap:cedarFinish,roughness:.92,color:color('#644b45')
     });
@@ -1069,19 +1329,22 @@
       batch(trim,edge,x,waterLevel+.055,z,.54,.048,.56);
       batch(poolGeo,waterContact,x,waterLevel+.003,z,1.54,1,1.63);
     }
-    function galleryPost(x,z,width,depth,footWidth,footDepth,height){
-      const footHeight=.49,woodBase=footHeight-.018;
-      batch(beam,stone,x,footHeight/2,z,footWidth,footHeight,footDepth);
-      blockWalking(x,z,Math.max(footWidth+.016,.394),Math.max(footDepth+.016,.394));
-      batch(capBlock,edge,x,footHeight-.012,z,footWidth+.016,.030,footDepth+.016);
-      batch(beam,uprightCedar,x,(height+woodBase)/2,z,width,height-woodBase,depth);
-      // The rails meet this separate stone collar, including at right angles.
-      batch(capBlock,edge,x,.784,z,.394,.084,.394);
-      batch(poolGeo,contact,x,.008,z,footWidth+.26,1,footDepth+.26);
-      batch(poolGeo,postContact,x,footHeight+.004,z,width+.10,1,depth+.10);
+    const pierWidth=.354,pierCapWidth=.414,wallJoint=.006,pavilionInset=.245;
+    const wallCapBase=.742,wallCapTop=.826,wallBandBase=.527;
+    function galleryPost(x,z,width,depth,height){
+      batch(wallBlock,stone,x,wallBandBase/2,z,pierWidth,wallBandBase,pierWidth);
+      batch(wallBlock,plaster,x,(wallBandBase+wallCapBase)/2,z,pierWidth,wallCapBase-wallBandBase,pierWidth);
+      batch(capBlock,edge,x,(wallCapBase+wallCapTop)/2,z,pierCapWidth,wallCapTop-wallCapBase,pierCapWidth);
+      blockWalking(x,z,pierCapWidth,pierCapWidth);
+      batch(beam,uprightCedar,x,(height+wallCapTop)/2,z,width,height-wallCapTop,depth);
+      batch(trim,bronze,x,wallCapTop+.025,z,width+.05,.050,depth+.05);
+      batch(poolGeo,contact,x,.008,z,pierWidth+.26,1,pierWidth+.26);
       batch(poolGeo,postContact,x,.829,z,width+.10,1,depth+.10);
     }
-    function stoneWall(alongX,fixed,from,to,capFrom,capTo){
+    function stoneWall(alongX,fixed,firstPier,lastPier){
+      const bodyInset=pierWidth/2+wallJoint,capInset=pierCapWidth/2+wallJoint;
+      const from=firstPier+bodyInset,to=lastPier-bodyInset;
+      const capFrom=firstPier+capInset,capTo=lastPier-capInset;
       const length=to-from;
       const spans=Math.max(1,Math.round(length/1.12)),step=length/spans;
       const rotation=alongX?0:Math.PI/2;
@@ -1090,16 +1353,17 @@
         batch(geometry,material,alongX?mid:fixed,y,alongX?fixed:mid,span,height,thickness,rotation);
       }
       // Run recessed mortar behind the joints in both the wall and its cap.
-      slab(cube,mortar,from,to,.386,.758,.280);
-      slab(cube,mortar,capFrom,capTo,.780,.076,.366);
+      slab(cube,mortar,from-wallJoint,to+wallJoint,.386,.758,.280);
+      slab(cube,mortar,capFrom-wallJoint,capTo+wallJoint,.780,.076,.366);
       const mid=(capFrom+capTo)/2,span=capTo-capFrom;
       blockWalking(alongX?mid:fixed,alongX?fixed:mid,alongX?span:.394,alongX?.394:span);
       for(let i=0;i<spans;i++){
         const low=from+i*step,high=low+step;
         const start=low+(i===0?0:.004),finish=high-(i===spans-1?0:.004);
-        slab(wallBlock,stone,start,finish,.263,.528,.30);
-        slab(wallBlock,plaster,start,finish,.640,.233,.31);
-        slab(wallCap,edge,i===0?capFrom:start,i===spans-1?capTo:finish,.784,.084,.394);
+        slab(wallBlock,stone,start,finish,wallBandBase/2,wallBandBase,.30);
+        slab(wallBlock,plaster,start,finish,(wallBandBase+wallCapBase)/2,wallCapBase-wallBandBase,.31);
+        slab(wallCap,edge,i===0?capFrom:start,i===spans-1?capTo:finish,
+          (wallCapBase+wallCapTop)/2,wallCapTop-wallCapBase,.394);
       }
     }
     const profiles=[
@@ -1123,27 +1387,41 @@
       }),roof);
       cover.position.set(x,height+.28,z-span/2);
       scene.add(reflected(cover));
+      const intervals=Math.ceil(depth/2.1);
+      const rafterRows=Array.from({length:intervals+1},(_,i)=>z+(i/intervals-.5)*depth);
+      const fasciaRows=[z-span/2,z+span/2];
+      function roofBand(material,top,bottom,thickness,rows){
+        // Sweep the entire profile so the timber meets at every change of pitch.
+        const shape=new T.Shape();
+        shape.moveTo(-half,profile[0][1]+top);
+        for(const [u,y] of profile.slice(1))shape.lineTo(u*half,y+top);
+        for(const [u,y] of [...profile].reverse())shape.lineTo(u*half,y+bottom);
+        shape.closePath();
+        const geometry=new T.ExtrudeGeometry(shape,{
+          depth:thickness,bevelEnabled:true,bevelSize:.008,bevelThickness:.008,bevelSegments:1
+        });
+        geometry.translate(0,0,-thickness/2);
+        const band=new T.InstancedMesh(geometry,material,rows.length);
+        const placement=new T.Matrix4();
+        rows.forEach((row,i)=>band.setMatrixAt(i,placement.makeTranslation(x,height,row)));
+        band.frustumCulled=false;
+        scene.add(reflected(band));
+      }
+      roofBand(cedar,.158,-.024,.126,rafterRows);
+      roofBand(darkTimber,.276,.078,.126,fasciaRows);
       for(let i=1;i<profile.length;i++){
         const [u0,y0]=profile[i-1],[u1,y1]=profile[i];
         const dx=(u1-u0)*half,dy=y1-y0;
         const midX=x+(u0+u1)*half/2,midY=height+.16+(y0+y1)/2;
         const pitch=Math.atan2(dy,dx),length=Math.hypot(dx,dy);
         bounceBox(roof,midX,midY+.05,z,length,.14,span,0,pitch);
-        // Fascia and the exposed ends of the rafters follow the roof pitch.
-        for(const end of [-1,1]){
-          batch(beam,darkTimber,midX,midY,z+end*span/2,length,.16,.13,0,pitch);
-        }
-        const intervals=Math.ceil(depth/2.1);
-        for(let r=0;r<=intervals;r++){
-          batch(trim,cedar,midX,midY-.07,z+(r/intervals-.5)*depth,length,.15,.13,0,pitch);
-        }
+        // Use matching pitch-aligned bounds for the cached shadow bake.
+        for(const row of fasciaRows)bounceBox(darkTimber,midX,midY+.017,row,length,.198,.142,0,pitch);
+        for(const row of rafterRows)bounceBox(cedar,midX,midY-.093,row,length,.182,.142,0,pitch);
       }
       for(const side of [-1,1]){
         const y=profile[side===1?profile.length-1:0][1];
-        batch(beam,darkTimber,x+side*half,height+.11+y,z,.15,.22,span+.14);
-        for(const end of [-1,1]){
-          batch(trim,bronze,x+side*half,height+.12+y,z+end*span/2,.17,.21,.15);
-        }
+        batch(beam,darkTimber,x+side*half,height+.176+y,z,.15,.202,span+.14);
       }
     }
     const stations=[];
@@ -1154,93 +1432,102 @@
         uv.setXY(j,(ax+.5+uv.getX(j)*(aw-1))/2048,1-(ay+.5+(1-uv.getY(j))*(ah-1))/2048);
       return geo;
     }
-    function roomSign(room,x,y,z){
+    function roomSign(room,x,y,headerFace){
       const c=document.createElement('canvas');c.width=768;c.height=120;
       const ctx=c.getContext('2d');ctx.fillStyle='#182c37';ctx.fillRect(0,0,768,120);
       ctx.strokeStyle='#a38962';ctx.lineWidth=3;ctx.strokeRect(6,6,756,108);
       ctx.fillStyle='#f5ddb3';ctx.font='italic 68px Georgia';ctx.textAlign='center';
       ctx.fillText(room.name,384,83);
       const texture=new T.CanvasTexture(c);texture.encoding=T.sRGBEncoding;
+      const backing=.034;
+      batch(trim,darkTimber,x,y,headerFace+backing/2-.002,2.829,.464,backing);
       const sign=new T.Mesh(new T.PlaneGeometry(2.8,.44),new T.MeshBasicMaterial({map:texture}));
-      sign.position.set(x,y,z);scene.add(sign);
+      sign.position.set(x,y,headerFace+backing);scene.add(reflected(sign));
     }
     rooms.forEach((room,r)=>{
       const {x,z,width:w,depth:d}=room,h=galleryHeights[r];
+      const wallReach=w/2-pavilionInset,entryReach=d/2-pavilionInset;
+      const headerBottom=h-.102,headerHeight=.265,headerDepth=.33;
+      const headerCenter=headerBottom+headerHeight/2;
       const roof=r===1 || r===3?cedar:blueTiles;
       galleryRoof(room,h,profiles[r],roof,[.42,.64,.63,.32,.53][r]);
-      deck(x,z,w,d,.218);
+      deck(x,z,w,d,.218,true);
       for(const side of [-1,1]){
-        const wallX=x+side*(w/2-.13);
-        const rimX=x+side*(w/2-.056);
-        batch(trim,darkTimber,rimX,-.115,z,.17,.22,d+.09);
-        for(const dz of [-d/2+.58,0,d/2-.58])deckPile(rimX,z+dz);
-        batch(poolGeo,contact,wallX-side*.17,.007,z,.44,1,d-.095);
-        batch(beam,darkTimber,wallX,h,z,.28,.27,d+.32);
-        const uprights=r===2?[-d/2,-d/4,d/4,d/2]:[-d/2,0,d/2];
+        const wallX=x+side*wallReach;
+        const rimX=x+side*(w/2-.09);
+        batch(trim,darkTimber,rimX,-.115,z,.17,.22,d-.04);
+        for(const dz of [-d/2+.58,0,d/2-.58])deckPile(x+side*(w/2-.31),z+dz);
+        batch(poolGeo,contact,wallX-side*.17,.007,z,.44,1,entryReach*2);
+        batch(ceilingTimber,darkTimber,wallX,headerCenter,z,.28,headerHeight,entryReach*2-headerDepth);
+        const uprights=r===2?[-entryReach,-d/4,d/4,entryReach]:[-entryReach,0,entryReach];
         for(let i=1;i<uprights.length;i++){
           const from=z+uprights[i-1],to=z+uprights[i];
-          stoneWall(false,wallX,from+.194,to-.194,from+.203,to-.203);
+          stoneWall(false,wallX,from,to);
         }
         for(const dz of uprights){
-          galleryPost(wallX,z+dz,.29,.28,.41,.40,h);
-          batch(trim,bronze,wallX,.84,z+dz,.34,.062,.34);
+          galleryPost(wallX,z+dz,.29,.28,h);
           batch(beam,darkTimber,wallX,h-.19,z+dz,.41,.17,.40);
         }
-        for(const dz of [-d/2,d/2]){
-          const wing=w/2-1.65;
+        for(const dz of [-entryReach,entryReach]){
+          const wing=wallReach-1.65;
           const wingX=x+side*(1.65+wing/2);
           const post=x+side*1.65;
-          const footEnds=[post+side*.16,wallX-side*.20].sort((a,b)=>a-b);
-          const capEnds=[post+side*.203,wallX-side*.203].sort((a,b)=>a-b);
-          stoneWall(true,z+dz,...footEnds,...capEnds);
-          galleryPost(post,z+dz,.25,.27,.33,.33,h);
+          stoneWall(true,z+dz,Math.min(post,wallX),Math.max(post,wallX));
+          galleryPost(post,z+dz,.25,.27,h);
           batch(trim,bronze,post,h-.30,z+dz,.30,.078,.31);
           batch(poolGeo,contact,wingX,.008,z+dz-Math.sign(dz)*.141,wing,1,.42);
-          // Seat the brace into the post and underside of the header.
-          batch(beam,cedar,post+side*.285,h-.332,z+dz,.76,.122,.205,0,side*.71);
+          // Extend both ends past the bearing faces so they seat in the post and header.
+          const rise=.58,run=.51;
+          batch(braceTimber,cedar,post+side*(.045+run/2),headerBottom+.07-rise/2,z+dz,
+            Math.hypot(run,rise),.122,.166,0,side*Math.atan2(rise,run));
         }
       }
-      for(const dz of [-d/2,d/2]){
-        batch(beam,cedar,x,h,z+dz,w,.20,.27);
-        batch(trim,darkTimber,x,h+.14,z+dz,w,.071,.29);
-        lantern(x-1.22,h-.85,z+dz,.67,true,h+.48,h-.099);
-        lantern(x+1.22,h-.85,z+dz,.67,true,h+.48,h-.099);
+      for(const dz of [-entryReach,entryReach]){
+        batch(ceilingTimber,cedar,x,headerCenter,z+dz,headerDepth,headerHeight,wallReach*2+.28,Math.PI/2);
+        lantern(x-1.22,h-.85,z+dz,.67,true,h+.48,headerBottom+.014);
+        lantern(x+1.22,h-.85,z+dz,.67,true,h+.48,headerBottom+.014);
       }
       if(r===4){
         const windowRing=new T.TorusGeometry(.81,.065,8,44);
         for(const side of [-1,1]){
-          const wx=x+side*(w/2+1.65)/2,wz=z-d/2;
+          const wx=x+side*(wallReach+1.65)/2,wz=z-entryReach;
           batch(windowRing,cedar,wx,1.86,wz,1,1,1);
           batch(cube,cedar,wx,1.02,wz,.10,.30,.11);
           batch(cube,bronze,wx,1.58,wz,1.48,.026,.05);
         }
       }else if(r===1 || r===3){
         for(const side of [-1,1]){
-          const wz=z+d/2,wing=w/2-1.65;
+          const wz=z+entryReach-.12,wing=wallReach-1.65;
           const count=r===1?7:4;
+          const sill=r===1?h-.76:1.75;
+          const slatHigh=headerBottom+.045,slatLow=sill+.012;
           for(let i=1;i<=count;i++)
-            batch(cube,cedar,x+side*(1.65+i*wing/(count+1)),r===1?h-.42:h/2,wz,.052,r===1?.68:h-.12,.075);
-          batch(cube,cedar,x+side*(1.65+wing/2),r===1?h-.76:1.75,wz,wing,.065,.09);
+            batch(cube,cedar,x+side*(1.65+i*wing/(count+1)),
+              (slatHigh+slatLow)/2,wz,.052,slatHigh-slatLow,.064);
+          batch(ceilingTimber,cedar,x+side*(1.65+wing/2),sill,wz,.072,.065,wing,Math.PI/2);
         }
       }
-      roomSign(room,x,h+.01,z+d/2+.145);
+      roomSign(room,x,headerCenter,z+entryReach+headerDepth/2);
       room.photos.forEach((id,j)=>{
         const side=j%2?1:-1, count=Math.ceil((room.photos.length-(side===1?1:0))/2);
         const pz=z+d/2-(Math.floor(j/2)+.5)*d/count, px=x+side*(w/2-.39);
         const angle=-side*Math.PI/2,[,,aw,ah]=atlas.regions[id];
         const ph=Math.min(1.72,2.48*ah/aw),pw=ph*aw/ah,mid=1.86;
-        batch(beam,darkTimber,px+.14*side,mid,pz,pw+.42,ph+.42,.16,angle);
+        const backingX=px+.14*side;
+        batch(beam,darkTimber,backingX,mid,pz,pw+.42,ph+.42,.16,angle);
         batch(trim,cedar,px+.078*side,mid,pz,pw+.31,ph+.31,.15,angle);
         batch(trim,bronze,px+.039*side,mid,pz,pw+.19,ph+.19,.097,angle);
         batch(trim,linen,px,mid,pz,pw+.14,ph+.14,.06,angle);
         blockWalking(px+.085*side,pz,.27,pw+.42);
-        const wallX=x+side*(w/2-.13),base=.826,frameBottom=mid-(ph+.42)/2;
+        const wallX=x+side*wallReach,base=wallCapTop,frameBottom=mid-(ph+.42)/2;
         const hangerTop=frameBottom+.27;
+        // Seat the arms in the rear timber and the uprights behind it.
+        const armSeat=backingX-.035*side,armEnd=wallX+.030*side;
         batch(trim,pictureMetal,px+.216*side,mid,pz,.105,ph*.72,pw*.79);
         for(const dz of [-pw*.32,pw*.32]){
           batch(trim,pictureMetal,wallX,base+.018,pz+dz,.20,.039,.15);
           batch(trim,pictureMetal,wallX,(base+hangerTop)/2,pz+dz,.079,hangerTop-base,.088);
-          batch(trim,pictureMetal,wallX-.075*side,hangerTop,pz+dz,.23,.070,.108);
+          batch(trim,pictureMetal,(armSeat+armEnd)/2,hangerTop,pz+dz,Math.abs(armEnd-armSeat),.070,.108);
         }
         const pictureX=px-.198*side,pictureY=mid+ph/2+.18;
         const lightWidth=Math.min(.77,pw*.51);
@@ -1267,8 +1554,18 @@
         if(j===1)shadowLamps[r]=lamp;
       });
     });
-    const stripBatches=new Map();
-    const boxPositions=cube.getAttribute('position'),boxUVs=cube.getAttribute('uv');
+    function deckEdgeBoards(start,finish,normal,thickness,width,offset=0){
+      const spans=Math.ceil(Math.hypot(finish.x-start.x,finish.z-start.z)/3.7);
+      let from=start;
+      for(let i=1;i<=spans;i++){
+        const t=i/spans;
+        const to=i===spans?finish:{
+          x:T.MathUtils.lerp(start.x,finish.x,t),z:T.MathUtils.lerp(start.z,finish.z,t),...normal
+        };
+        bridgeStrip(walkwayTrim,from,to,-thickness/2,thickness,width,offset,normal,'border');
+        from=to;
+      }
+    }
     function bridgeCut(bridge,distance,{nx,nz}=bridge.normal){
       // Preserve the side lines when cutting a square threshold or a miter.
       const t=distance/bridge.length;
@@ -1280,56 +1577,260 @@
     function bridgeStrip(material,start,finish,y,height,width,offset,normal,grain){
       const [sx,sz]=bridgePoint(start,finish,0,offset);
       const [ex,ez]=bridgePoint(start,finish,1,offset);
-      bounceBox(material,(sx+ex)*.5,y,(sz+ez)*.5,width,height,Math.hypot(ex-sx,ez-sz),
+      const length=Math.hypot(ex-sx,ez-sz);
+      bounceBox(material,(sx+ex)*.5,y,(sz+ez)*.5,width,height,length,
         Math.atan2(ex-sx,ez-sz));
-      if(!stripBatches.has(material))stripBatches.set(material,{positions:[],uvs:[],indices:[]});
-      const {positions,uvs,indices}=stripBatches.get(material);
+      if(!stripBatches.has(material))stripBatches.set(material,{positions:[],uvs:[],indices:[],acrossDeck:[],trimDimensions:[]});
+      const {positions,uvs,indices,acrossDeck,trimDimensions}=stripBatches.get(material);
       const base=positions.length/3;
+      const border=grain==='border';
+      const isTrim=material===headerPlank || material===walkwayTrim;
+      const miterHalf=grain==='miter-start' || grain==='miter-end';
+      const miterScale=Math.hypot(start.nx,start.nz);
       for(let v=0;v<boxPositions.count;v++){
         const [x,z]=bridgePoint(start,finish,boxPositions.getZ(v)+.5,offset+boxPositions.getX(v)*width);
         positions.push(x,y+boxPositions.getY(v)*height,z);
         const along=boxPositions.getZ(v)+.5,across=boxPositions.getX(v)+.5;
+        if(material===timber)acrossDeck.push(across);
         const run=(z-start.z)*normal.nx-(x-start.x)*normal.nz;
-        if(v<8)uvs.push(along,boxUVs.getY(v));
+        if(isTrim){
+          const crossGrain=border?across:miterHalf?(along+(grain==='miter-start'?1:0))*.5:along;
+          const alongGrain=border?along:across;
+          if(v>=8 && v<16)uvs.push(crossGrain,alongGrain);
+          else uvs.push(boxPositions.getY(v)+.5,v<8?along:across);
+          trimDimensions.push(border?width:length/miterScale*(miterHalf?2:1),border?length:width*miterScale);
+        }
+        else if(v<8)uvs.push(along,boxUVs.getY(v));
         // Measure in world units so the miter trims the end boards cleanly.
         else if(v<16 && grain==='deck')uvs.push(across*width/plankLength,run/plankRepeatLength);
-        else if(v<16 && grain==='threshold')uvs.push(along,across*width/2.8);
-        else if(v<16 && grain==='border')uvs.push(across,run*.48);
         else if(v<16)uvs.push(across,along);
         else uvs.push(boxUVs.getX(v),boxUVs.getY(v));
       }
       for(const index of cube.index.array)indices.push(base+index);
     }
+    const railBands=[
+      {material:lowerRail,height:.36,thickness:.061,width:.082},
+      {material:railWood,height:.70,thickness:.115,width:.125}
+    ];
+    const postWidth=.23,postHeight=.87,faceRadius=.079,socketDepth=.030;
+    const railSeatInset=faceRadius-socketDepth+.005;
+    const railPosts=new Map(),postGeometries=new Map();
+    function railPostAt(x,z,angle,anchor=null){
+      const key=Math.round(x*1e6)+','+Math.round(z*1e6);
+      if(!railPosts.has(key))railPosts.set(key,{x,z,angle,anchor,ends:[]});
+      return railPosts.get(key);
+    }
+    function galleryAtThreshold(point){
+      return rooms.find(room=>Math.abs(point.x-room.x)<1e-6
+        && Math.abs(Math.abs(point.z-room.z)-room.depth/2)<1e-6);
+    }
+    function galleryRailPost(room,threshold,side,angle,postOffset){
+      const x=room.x+side*1.65;
+      const z=room.z+Math.sign(threshold.z-room.z)*(room.depth/2-pavilionInset);
+      return railPostAt(room.x+side*postOffset,z,angle,{x,side});
+    }
+    function railPostFitting(outline,layers){
+      const miters=outline.map((point,i)=>{
+        const before=outline[(i+outline.length-1)%outline.length],after=outline[(i+1)%outline.length];
+        const first=new T.Vector2(before.y-point.y,point.x-before.x).normalize();
+        const second=new T.Vector2(point.y-after.y,after.x-point.x).normalize();
+        const scale=1/(1+first.dot(second));
+        return first.add(second).multiplyScalar(scale);
+      });
+      const rings=layers.map(([y,offset])=>outline.map((point,i)=>{
+        const out=point.clone().addScaledVector(miters[i],offset);
+        return [out.x,y-.5,out.y];
+      }));
+      const corners=rings.flat();
+      const width=2*Math.max(...corners.map(([x])=>Math.abs(x)));
+      const depth=2*Math.max(...corners.map(([, ,z])=>Math.abs(z)));
+      const positions=[];
+      function triangle(...vertices){
+        for(const [x,y,z] of vertices)positions.push(x/width,y,z/depth);
+      }
+      for(let ring=1;ring<rings.length;ring++)for(let i=0;i<outline.length;i++){
+        const next=(i+1)%outline.length,low=rings[ring-1],high=rings[ring];
+        triangle(low[i],low[next],high[next]);
+        triangle(low[i],high[next],high[i]);
+      }
+      const bottom=rings[0],upper=rings[rings.length-1];
+      for(let i=0;i<outline.length;i++){
+        const next=(i+1)%outline.length;
+        triangle([0,-.5,0],bottom[next],bottom[i]);
+        triangle([0,.5,0],upper[i],upper[next]);
+      }
+      const geometry=new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute(positions,3));
+      geometry.computeVertexNormals();
+      return {geometry,width,depth};
+    }
+    function mortisedPost(post){
+      const cosine=Math.cos(post.angle),sine=Math.sin(post.angle);
+      let front,back;
+      for(const [x,z] of post.ends){
+        const local=new T.Vector2(cosine*x-sine*z,sine*x+cosine*z);
+        if(local.y>0)front=local;else back=local;
+      }
+      const frontOpen=Boolean(front),backOpen=Boolean(back);
+      if(!front)front=back.clone().negate();
+      if(!back)back=front.clone().negate();
+      const key=[front.x,front.y,back.x,back.y].map(value=>value.toFixed(5)).join(',')+frontOpen+backOpen;
+      if(postGeometries.has(key))return postGeometries.get(key);
+      const faceCorners=direction=>{
+        const center=direction.clone().multiplyScalar(faceRadius);
+        const across=new T.Vector2(direction.y,-direction.x).multiplyScalar(.0845);
+        return [center.clone().sub(across),center.clone().add(across)];
+      };
+      const corners=[...faceCorners(front),...faceCorners(back)];
+      const edges=corners.map((corner,i)=>{
+        const next=corners[(i+1)%4],cut=.004/corner.distanceTo(next);
+        return [corner.clone().lerp(next,cut),next.clone().lerp(corner,cut)];
+      });
+      const positions=[],colors=[];
+      function triangle(a,b,c,tint){
+        for(const [x,y,z] of [a,b,c]){
+          positions.push(x/postWidth,y/postHeight-.5,z/postWidth);
+          colors.push(tint,tint,tint);
+        }
+      }
+      function quad(a,b,c,d,tint=1){
+        triangle(a,b,c,tint);triangle(a,c,d,tint);
+      }
+      function face(start,finish,bands){
+        const across=finish.clone().sub(start),width=across.length();
+        across.divideScalar(width);
+        const point=(u,y,depth=0)=>[
+          start.x+across.x*u+across.y*depth,y,start.y+across.y*u-across.x*depth
+        ];
+        const panel=(left,right,low,high)=>quad(point(left,low),point(right,low),point(right,high),point(left,high));
+        let low=0;
+        for(const rail of bands){
+          const halfWidth=(rail.width+.013)/2,halfHeight=(rail.thickness+.014)/2;
+          const left=width/2-halfWidth,right=width/2+halfWidth;
+          const sill=rail.height-halfHeight,lintel=rail.height+halfHeight;
+          panel(0,width,low,sill);
+          panel(0,left,sill,lintel);
+          panel(right,width,sill,lintel);
+          const opening=(depth)=>[
+            point(left,sill,depth),point(right,sill,depth),
+            point(right,lintel,depth),point(left,lintel,depth)
+          ];
+          const rim=opening(0),inner=opening(socketDepth);
+          for(let i=0;i<4;i++){
+            const next=(i+1)%4;
+            quad(rim[i],rim[next],inner[next],inner[i],.43);
+          }
+          quad(...inner,.26);
+          low=lintel;
+        }
+        panel(0,width,low,postHeight);
+      }
+      edges.forEach(([start,finish],i)=>{
+        const open=i===0?frontOpen:i===2?backOpen:false;
+        face(start,finish,open?railBands:[]);
+        face(finish,edges[(i+1)%4][0],[]);
+      });
+      const outline=edges.flat();
+      outline.forEach((point,i)=>{
+        const next=outline[(i+1)%outline.length];
+        triangle([0,postHeight,0],[point.x,postHeight,point.y],[next.x,postHeight,next.y],1);
+        triangle([0,0,0],[next.x,0,next.y],[point.x,0,point.y],1);
+      });
+      const geometry=new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute(positions,3));
+      geometry.setAttribute('color',new T.Float32BufferAttribute(colors,3));
+      geometry.computeVertexNormals();
+      const fittings={
+        body:geometry,
+        cap:railPostFitting(outline,[[0,.014],[.11,.022],[.78,.022],[1,.012]]),
+        shoe:railPostFitting(outline,[[0,.017],[.085,.023],[.72,.023],[1,.009]])
+      };
+      postGeometries.set(key,fittings);
+      return fittings;
+    }
+    function bridgeRail(from,to){
+      const dx=to.x-from.x,dz=to.z-from.z;
+      const length=Math.hypot(dx,dz),angle=Math.atan2(dx,dz);
+      const direction=[dx/length,dz/length];
+      from.ends.push(direction);
+      to.ends.push(direction.map(value=>-value));
+      for(const {material,height,thickness,width} of railBands){
+        batch(handrailGeometry,material,(from.x+to.x)/2,height,(from.z+to.z)/2,
+          width,thickness,length-2*railSeatInset,angle);
+      }
+      const lower=railBands[0],lip=faceRadius+.009;
+      batch(handrailGeometry,railFoot,from.x+direction[0]*lip,lower.height,from.z+direction[1]*lip,
+        lower.width+.010,lower.thickness+.009,.032,angle);
+      batch(handrailGeometry,railFoot,to.x-direction[0]*lip,lower.height,to.z-direction[1]*lip,
+        lower.width+.010,lower.thickness+.009,.032,angle);
+    }
     for(const b of bridges){
       const {start,finish,length,width,normal,startsAtBend,endsAtBend}=b;
-      const header=.23,miter=.074,border=.14,railInset=.37;
-      const boardStart=bridgeCut(b,startsAtBend?miter:header,start);
-      const boardFinish=bridgeCut(b,length-(endsAtBend?miter:header),finish);
-      bridgeStrip(walkwayTrim,start,boardStart,-.13,.26,width,0,normal,'threshold');
-      bridgeStrip(walkwayTrim,boardFinish,finish,-.13,.26,width,0,normal,'threshold');
-      bridgeStrip(timber,boardStart,boardFinish,-.13,.26,width-2*border,0,normal,'deck');
+      const header=.205,miterHalf=.067,border=deckBorderWidth,railInset=.16;
+      const innerWidth=width-2*border;
+      const boardStart=bridgeCut(b,startsAtBend?miterHalf*Math.hypot(start.nx,start.nz):header,start);
+      const boardFinish=bridgeCut(b,length-(endsAtBend?miterHalf*Math.hypot(finish.nx,finish.nz):header),finish);
+      bridgeStrip(headerPlank,start,boardStart,-.13,.26,innerWidth,0,normal,startsAtBend?'miter-start':'threshold');
+      bridgeStrip(headerPlank,boardFinish,finish,-.13,.26,innerWidth,0,normal,endsAtBend?'miter-end':'threshold');
+      bridgeStrip(timber,boardStart,boardFinish,-.13,.26,innerWidth,0,normal,'deck');
       const railStart=startsAtBend?start:bridgeCut(b,railInset);
       const railFinish=endsAtBend?finish:bridgeCut(b,length-railInset);
-      const spans=Math.ceil(Math.hypot(railFinish.x-railStart.x,railFinish.z-railStart.z)/3.5);
+      const startGallery=startsAtBend?null:galleryAtThreshold(start);
+      const endGallery=endsAtBend?null:galleryAtThreshold(finish);
+      const postOffset=width/2-.25;
+      const railLength=side=>{
+        const [sx,sz]=bridgePoint(railStart,railFinish,0,side*postOffset);
+        const [ex,ez]=bridgePoint(railStart,railFinish,1,side*postOffset);
+        return Math.hypot(ex-sx,ez-sz);
+      };
+      const spans=Math.ceil(Math.max(railLength(-1),railLength(1))/2.7);
+      const postAngle=j=>{
+        const cross=j===0?railStart:j===spans?railFinish:normal;
+        return Math.atan2(-cross.nz,cross.nx);
+      };
       for(const side of [-1,1]){
         const offset=side*(width/2-border/2);
-        bridgeStrip(walkwayTrim,boardStart,boardFinish,-.13,.26,border,offset,normal,'border');
-        const railOffset=side*(width/2-.16);
-        bridgeStrip(cedar,railStart,railFinish,.60,.08,.065,railOffset,normal);
-        bridgeStrip(bronze,railStart,railFinish,.33,.035,.028,railOffset,normal);
+        deckEdgeBoards(start,finish,normal,.26,border,offset);
+        const postAt=j=>{
+          const [x,z]=bridgePoint(railStart,railFinish,j/spans,side*postOffset);
+          if(j===0 && startGallery)return galleryRailPost(startGallery,start,Math.sign(x-startGallery.x),postAngle(j),postOffset);
+          if(j===spans && endGallery)return galleryRailPost(endGallery,finish,Math.sign(x-endGallery.x),postAngle(j),postOffset);
+          return railPostAt(x,z,postAngle(j));
+        };
+        let previous=postAt(0);
+        for(let j=1;j<=spans;j++){
+          const next=postAt(j);
+          bridgeRail(previous,next);
+          previous=next;
+        }
       }
       for(let j=startsAtBend?1:0;j<=spans;j++){
-        const t=j/spans;
-        const [cx,cz]=bridgePoint(railStart,railFinish,t,0);
-        const [rx,rz]=bridgePoint(railStart,railFinish,t,1);
-        const angle=Math.atan2(cz-rz,rx-cx);
-        batch(beam,darkTimber,cx,-.30,cz,width+.10,.16,.16,angle);
-        for(const side of [-1,1]){
-          const [px,pz]=bridgePoint(railStart,railFinish,t,side*(width/2-.16));
-          batch(cube,plinth,px,.12,pz,.15,1.25,.15,angle);
-          batch(poolGeo,contact,px,.009,pz,.33,1,.35,angle);
-          batch(cube,railCap,px,.75,pz,.17,.06,.17,angle);
-        }
+        const [cx,cz]=bridgePoint(railStart,railFinish,j/spans,0);
+        batch(beam,darkTimber,cx,-.30,cz,width-.14,.16,.16,postAngle(j));
+      }
+    }
+    for(const post of railPosts.values()){
+      const {x,z,anchor}=post;
+      if(post.ends.length===2){
+        const [a,b]=post.ends;
+        const forward=a[0]*Math.sin(post.angle)+a[1]*Math.cos(post.angle)>0?a:b;
+        const backward=forward===a?b:a;
+        post.angle=Math.atan2(forward[0]-backward[0],forward[1]-backward[1]);
+      }
+      const {angle}=post;
+      const {body,cap,shoe}=mortisedPost(post);
+      const footprintX=Math.max(postWidth,cap.width,shoe.width),footprintZ=Math.max(postWidth,cap.depth,shoe.depth);
+      const cosine=Math.abs(Math.cos(angle)),sine=Math.abs(Math.sin(angle));
+      blockWalking(x,z,cosine*footprintX+sine*footprintZ,sine*footprintX+cosine*footprintZ);
+      batch(body,plinth,x,postHeight/2,z,postWidth,postHeight,postWidth,angle);
+      batch(shoe.geometry,railFoot,x,.050,z,shoe.width,.10,shoe.depth,angle);
+      batch(cap.geometry,railCap,x,.877,z,cap.width,.064,cap.depth,angle);
+      batch(poolGeo,postContact,x,.006,z,.31,1,.31,angle);
+      if(anchor){
+        const stoneFace=anchor.x-anchor.side*pierWidth/2;
+        const from=x+anchor.side*.069,to=stoneFace+anchor.side*.012;
+        batch(railingBlock,railFoot,(from+to)/2,.632,z,Math.abs(to-from),.075,.075);
+        batch(railingBlock,railFoot,stoneFace-anchor.side*.005,.632,z,.022,.172,.126);
       }
     }
     lanternSpans.forEach(([[sx,sz],[x,z]],i)=>{
@@ -1339,11 +1840,13 @@
       lantern(cx+nx*2,.78,cz+nz*2,.83,true);
       if(i%2===0)lantern(cx-nx*3.5,1.86,cz-nz*3.5,.74,true);
     });
-    for(const [material,{positions,uvs,indices}] of stripBatches){
+    for(const [material,{positions,uvs,indices,acrossDeck,trimDimensions}] of stripBatches){
       const geo=new T.BufferGeometry();
       geo.setIndex(indices);
       geo.setAttribute('position',new T.Float32BufferAttribute(positions,3));
       geo.setAttribute('uv',new T.Float32BufferAttribute(uvs,2));
+      if(acrossDeck.length)geo.setAttribute('boardAcross',new T.Float32BufferAttribute(acrossDeck,1));
+      if(trimDimensions.length)geo.setAttribute('trimDimensions',new T.Float32BufferAttribute(trimDimensions,2));
       geo.computeVertexNormals();
       scene.add(reflected(new T.Mesh(geo,material)));
     }
@@ -1351,7 +1854,7 @@
     for(const side of [-1,1]){
       batch(cube,stone,end[0]+side*3.14,.18,end[1],.25,.55,4.6);
       blockWalking(end[0]+side*3.14,end[1],.25,4.6);
-      for(const dz of [-1.68,1.68])deckPile(end[0]+side*3.19,end[1]+dz);
+      for(const dz of [-1.68,1.68])deckPile(end[0]+side*2.98,end[1]+dz);
       lantern(end[0]+side*3.10,1.06,end[1]-1.66,.96,true);
     }
     for(const {geometry,material,matrices} of batches.values()){
@@ -1385,13 +1888,14 @@
       lantern(Math.sin(angle)*dist,4+rand()*7,-Math.cos(angle)*dist,.55+rand()*1.12);
     }
     const architectureMaterials=[stone,edge,bronze,plinth,linen,photoMat,pictureMetal,timber,blueTiles,
-      cedar,uprightCedar,walkwayTrim,railCap,plaster,darkTimber,mortar];
+      cedar,uprightCedar,walkwayTrim,headerPlank,railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar];
     if(supportsShadows)shadowValues=riverShadows.uniforms(T,rooms,shadowLamps,blueLight.position);
     lightArchitecture(architectureMaterials);
     function architectureBoxes(){
       const boxes=bounceBoxes.slice();
       for(const {geometry,material,matrices} of batches.values()){
-        if(!architectureMaterials.includes(material) || geometry.type==='TorusGeometry')continue;
+        if(!architectureMaterials.includes(material) || geometry.type==='TorusGeometry'
+          || (material===railFoot && geometry===handrailGeometry))continue;
         for(const matrix of matrices)boxes.push({material,matrix});
       }
       return boxes;
@@ -1649,8 +2153,8 @@
       try{
         if(mode>0){
           const [mask,depth]=await Promise.all([
-            loadShadowTexture('river-shadow-mask.png'),
-            mode>1?loadShadowTexture('river-shadow-depth.png?v=cached-moon',true):null
+            loadShadowTexture('river-shadow-mask.png?v=recessed-photo-mounts'),
+            mode>1?loadShadowTexture('river-shadow-depth.png?v=recessed-photo-mounts',true):null
           ]);
           if(selection!==shadowSelection)return;
           shadowValues.riverShadowMask.value=mask;
@@ -1997,14 +2501,20 @@
   }
   function prepare(){
     if(preparing)return preparing;
-    preparing=new Promise((resolve,reject)=>{
+      const atlasRequest=new Promise((resolve,reject)=>{
       const script=document.createElement('script');
       script.src='garden-atlas.js';
       script.onload=()=>resolve(gardenAtlas);
       script.onerror=()=>reject(new Error('Offline photo atlas unavailable'));
       document.head.appendChild(script);
-    }).then(atlas=>{
-      garden=makeGarden(atlas);
+      });
+      const textureLoader=new THREE.TextureLoader();
+      // Poly Haven CC0. The finish maps pack height, roughness and grain.
+      const woodRequest=textureLoader.loadAsync('materials/wood-finish.webp?v=2').catch(()=>null);
+      const slateRequest=textureLoader.loadAsync('materials/slate-finish.webp').catch(()=>null);
+      const deckRequest=textureLoader.loadAsync('materials/deck-color.webp').catch(()=>null);
+      preparing=Promise.all([atlasRequest,woodRequest,slateRequest,deckRequest]).then(([atlas,wood,slate,deck])=>{
+        garden=makeGarden(atlas,{wood,slate,deck});
       startFrames();
     }).catch(showFallback);
     return preparing;
