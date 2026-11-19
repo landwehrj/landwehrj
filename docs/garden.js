@@ -7,6 +7,7 @@
   const music = document.querySelector('#garden-music');
   const sound = document.querySelector('#garden-sound');
   const giButton = document.querySelector('#garden-gi');
+  const shadowControl = document.querySelector('#garden-shadows');
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -81,7 +82,7 @@
   // Direct links have no entry click to unlock audio. The first walking or
   // viewing gesture can start the river without starting the music.
   function activateOnInteraction(e){
-    if(e.target.closest('#garden-ambience, #garden-gi, #leave-garden') || e.key==='Escape')return;
+    if(e.target.closest('#garden-ambience, #garden-gi, #garden-shadows, #leave-garden') || e.key==='Escape')return;
     if(!ambience.playing)startAmbience();
   }
   dialog.addEventListener('pointerup',activateOnInteraction);
@@ -142,6 +143,9 @@
     const galleryHeights=[3.5,3.23,4.05,3.65,3.25];
     const supportsGI=Boolean(giButton && renderer.capabilities.isWebGL2 && typeof riverGI!=='undefined');
     const giUniforms=supportsGI?riverGI.uniforms(T):null;
+    const supportsShadows=Boolean(shadowControl && typeof riverShadows!=='undefined');
+    const shadowLamps=[];
+    let shadowValues=null;
     const bounceBoxes=[];
     const bounceMatrix=new T.Object3D();
     let giEffect=null;
@@ -534,6 +538,10 @@
       const lamp={x,y,z,size,phase:rand()*fullTurn,glow,fixture,canopy,mountHeight};
       lanterns.push(lamp);
       if(fixture)fixtures.push(lamp);
+      return lamp;
+    }
+    function shadowVariant(mode=shadowValues?.riverShadowMode.value ?? 0){
+      return mode===0?'off':'map';
     }
     function lightArchitecture(materials){
       // Each strip of the river knows every lamp that can reach it. Picking
@@ -544,9 +552,10 @@
         return fixtures.filter(lamp=>lamp.z>=low-range && lamp.z<=low+cell+range);
       });
       const slots=Math.max(...rows.map(row=>row.length));
-      const pixels=new Uint8Array(cells*slots*8);
+      const record=shadowValues?3:2;
+      const pixels=new Uint8Array(cells*slots*record*4);
       rows.forEach((row,i)=>row.forEach((lamp,j)=>{
-        const index=(i*slots+j)*8;
+        const index=(i*slots+j)*record*4;
         // Pack two bytes per coordinate for stable positions on WebGL 1 and 2.
         const coords=[(lamp.x+32)/64,(lamp.y+.31*lamp.size)/8,(lamp.z+224)/256];
         coords.forEach((coord,axis)=>{
@@ -556,8 +565,9 @@
         });
         pixels[index+3]=Math.round(lamp.size*128);
         pixels[index+7]=Math.round(lamp.canopy*31.875);
+        if(shadowValues)pixels[index+8]=shadowLamps.indexOf(lamp)+1;
       }));
-      const lightmap=new T.DataTexture(pixels,slots*2,cells,T.RGBAFormat);
+      const lightmap=new T.DataTexture(pixels,slots*record,cells,T.RGBAFormat);
       lightmap.needsUpdate=true;
       const warm={value:color('#ffc094')};
       const roomBounds=rooms.map(({x,z,width,depth})=>new T.Vector4(x,z,width/2,depth/2));
@@ -566,8 +576,9 @@
         const isCap=material===edge;
         const isPrint=material===photoMat,isMat=material===linen,isDeck=material===timber;
         const profile=isStone?'stone':isPrint?'print':isMat?'mat':isDeck?'deck':'lanterns';
-        material.customProgramCacheKey=()=>'river-'+profile;
+        material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant();
         material.onBeforeCompile=shader=>{
+          const variant=shadowVariant(),castShadows=variant!=='off';
           addRiverMist(shader);
           if(giUniforms)riverGI.receive(shader,giUniforms);
           shader.uniforms.riverFixtures={value:lightmap};
@@ -586,18 +597,24 @@
             if(riverCell>=0. && riverCell<${cells.toFixed(1)}){
               float row=(riverCell+.5)/${cells.toFixed(1)};
               vec3 surfaceNormal=inverseTransformDirection(geometry.normal,viewMatrix);
+              ${castShadows?'vec3 shadowNormal=inverseTransformDirection(geometryNormal,viewMatrix);':''}
               for(int slot=0;slot<${slots};slot++){
-                float col=(float(slot)*2.+.5)/${(slots*2).toFixed(1)};
+                float col=(float(slot)*${record.toFixed(1)}+.5)/${(slots*record).toFixed(1)};
                 vec4 packedLamp=texture2D(riverFixtures,vec2(col,row));
                 if(packedLamp.a<=0.)break;
-                vec4 fine=texture2D(riverFixtures,vec2(col+1./${(slots*2).toFixed(1)},row));
+                vec4 fine=texture2D(riverFixtures,vec2(col+1./${(slots*record).toFixed(1)},row));
                 vec3 lamp=(packedLamp.rgb*256.+fine.rgb)/257.*vec3(64.,8.,256.)-vec3(32.,0.,224.);
                 vec3 delta=lamp-riverSurface;
                 float dist=length(delta);
                 float fade=1.-smoothstep(2.15,${range.toFixed(1)},dist);
                 float flame=1.+.032*sin(riverFixtureTime*3.4+lamp.z*1.31);
+                float visibility=1.;
+                ${castShadows?`if(fade>0.){
+                  float shadowSlot=floor(texture2D(riverFixtures,vec2(col+2./${(slots*record).toFixed(1)},row)).r*255.+.5)-1.;
+                  if(shadowSlot>=0.)visibility=riverLanternShadow(riverSurface,shadowNormal,lamp,shadowSlot);
+                }`:''}
                 directLight.direction=mat3(viewMatrix)*(delta/max(dist,.001));
-                directLight.color=riverFixtureColor*46.*packedLamp.a*flame*fade/(dot(delta,delta)+.92);
+                directLight.color=riverFixtureColor*46.*packedLamp.a*flame*fade*visibility/(dot(delta,delta)+.92);
                 directLight.visible=fade>0.;
                 RE_Direct(directLight,geometry,material,reflectedLight);
                 // A broad secondary lobe represents the lantern warming the wood
@@ -608,7 +625,7 @@
                   float indoors=smoothstep(-.1,.25,riverSurface.y)
                                *(1.-smoothstep(canopy+.18,canopy+.54,riverSurface.y));
                   float underside=clamp(.56-.38*surfaceNormal.y,.15,.96);
-                  irradiance+=vec3(1.,.49,.25)*.84*packedLamp.a*spread*indoors*underside;
+                  irradiance+=vec3(1.,.49,.25)*.84*packedLamp.a*spread*indoors*underside*mix(.35,1.,visibility);
                 }
               }
             }
@@ -648,6 +665,7 @@
             #include <roughnessmap_fragment>
             roughnessFactor=mix(roughnessFactor,.31,wetness*.74);
           `);
+          if(castShadows)riverShadows.receive(T,shader,shadowValues,rooms.length);
           if(isPrint || isMat){
             // Light from the bar above each frame falls across the print and mat.
             const pictureVarying='varying vec3 pictureFace;\n';
@@ -1223,7 +1241,8 @@
         };
         scene.add(glass);
         batch(beam,darkTimber,(wallX+lampX)*.5,h-.045,lampZ,.94,.098,.106);
-        lantern(lampX,2.45,lampZ,.54,true,h+.37,h-.094);
+        const lamp=lantern(lampX,2.45,lampZ,.54,true,h+.37,h-.094);
+        if(j===1)shadowLamps[r]=lamp;
       });
     });
     const stripBatches=new Map();
@@ -1333,7 +1352,16 @@
     }
     const architectureMaterials=[stone,edge,bronze,plinth,linen,photoMat,pictureMetal,timber,blueTiles,
       cedar,uprightCedar,walkwayTrim,railCap,plaster,darkTimber,mortar];
+    if(supportsShadows)shadowValues=riverShadows.uniforms(T,rooms,shadowLamps,blueLight.position);
     lightArchitecture(architectureMaterials);
+    function architectureBoxes(){
+      const boxes=bounceBoxes.slice();
+      for(const {geometry,material,matrices} of batches.values()){
+        if(!architectureMaterials.includes(material) || geometry.type==='TorusGeometry')continue;
+        for(const matrix of matrices)boxes.push({material,matrix});
+      }
+      return boxes;
+    }
     const lanternMeshes=pieces.map(([geometry,material])=>{
       const group=new T.InstancedMesh(geometry,material,lanterns.length);
       group.frustumCulled=false;scene.add(reflected(group));return group;
@@ -1557,16 +1585,61 @@
       renderer.setRenderTarget(target);
       renderer.render(screen,screenCamera);
     }
+    const shadowTextures=new Map();
+    function loadShadowTexture(file,packedDepth=false){
+      if(!shadowTextures.has(file)){
+        const request=new T.TextureLoader().loadAsync(file).then(texture=>{
+          if(packedDepth){
+            texture.minFilter=texture.magFilter=T.NearestFilter;
+            texture.generateMipmaps=false;
+          }
+          return texture;
+        }).catch(error=>{
+          shadowTextures.delete(file);
+          throw error;
+        });
+        shadowTextures.set(file,request);
+      }
+      return shadowTextures.get(file);
+    }
+    let shadowSelection=0;
+    async function changeShadows(){
+      const selection=++shadowSelection,mode=Number(shadowControl.value);
+      shadowControl.setAttribute('aria-busy',String(mode>0));
+      try{
+        if(mode>0){
+          const [mask,depth]=await Promise.all([
+            loadShadowTexture('river-shadow-mask.png'),
+            mode>1?loadShadowTexture('river-shadow-depth.png?v=cached-moon',true):null
+          ]);
+          if(selection!==shadowSelection)return;
+          shadowValues.riverShadowMask.value=mask;
+          shadowValues.riverShadowDepth.value=depth;
+        }
+        const shaderChanged=shadowVariant()!==shadowVariant(mode);
+        shadowValues.riverShadowMode.value=mode;
+        if(shaderChanged)for(const material of architectureMaterials)material.needsUpdate=true;
+      }catch(error){
+        if(selection===shadowSelection){
+          console.warn('Cast shadows are unavailable:',error);
+          shadowControl.value=String(shadowValues.riverShadowMode.value);
+        }
+      }finally{
+        if(selection===shadowSelection){
+          shadowControl.removeAttribute('aria-busy');
+          if(dialog.open && !view.hidden)draw();
+        }
+      }
+    }
+    if(shadowValues){
+      shadowControl.hidden=false;
+      shadowControl.addEventListener('change',changeShadows);
+    }
     function toggleGI(){
       const enabled=!giUniforms.riverGIEnabled.value;
       if(enabled && !giEffect){
         try{
-          const boxes=bounceBoxes.slice();
-          for(const {geometry,material,matrices} of batches.values()){
-            if(!architectureMaterials.includes(material) || geometry.type==='TorusGeometry')continue;
-            for(const matrix of matrices)boxes.push({material,matrix});
-          }
-          giEffect=riverGI.create(T,renderer,boxes,fixtures,giUniforms,screenMaterial,drawPass);
+          giEffect=riverGI.create(T,renderer,architectureBoxes(),fixtures,giUniforms,screenMaterial,drawPass);
         }catch(error){
           console.warn('Ray-traced lighting is unavailable:',error);
           giButton.hidden=true;
@@ -1824,6 +1897,7 @@
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();showFallback()});
     resize();updateLanterns(0);go(current,true);
     ready=true;
+    if(shadowValues)void changeShadows();
     return {go,update,resize,step(action){
       if(arrival)return;
       setGuide(-1);move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
@@ -1846,6 +1920,7 @@
     if(error)console.warn('The 3D memorial could not start:',error);
     stopFrames();walkPanel.inert=false;fallback.hidden=false;movement.hidden=true;view.hidden=true;
     if(giButton)giButton.hidden=true;
+    if(shadowControl)shadowControl.hidden=true;
     select(current);
   }
   function prepare(){
@@ -1904,6 +1979,7 @@
   const keys={KeyW:'forward',KeyS:'back',KeyA:'strafeLeft',KeyD:'strafeRight',
               ArrowUp:'forward',ArrowDown:'back',ArrowLeft:'left',ArrowRight:'right'};
   dialog.addEventListener('keydown',e=>{
+    if(e.target===shadowControl)return;
     const action=keys[e.code];
     if(walkPanel.inert){if(action)e.preventDefault();return}
     fastWalk=e.shiftKey;
