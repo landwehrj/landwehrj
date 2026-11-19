@@ -131,6 +131,8 @@
     const color = value => new T.Color(value).convertSRGBToLinear();
     const waterLevel=-.43;
     const nightTime={value:0};
+    const entryThresholdZ=rooms[0].z+rooms[0].depth/2;
+    const cleat=new T.Vector3(arrivalDock[0]+1.40,0,entryThresholdZ+1.15);
     scene.background=color('#060e22');
     scene.fog=new T.FogExp2(color('#1a2d42'),.013);
     const hemi=new T.HemisphereLight(color('#a5c4ee'),color('#455362'),.40);
@@ -172,7 +174,9 @@
         #endif
         riverSurface=(modelMatrix*riverPoint).xyz;`
       );
-      shader.fragmentShader='varying vec3 riverSurface;\n'+shader.fragmentShader.replace(
+      shader.uniforms.riverMistTime=nightTime;
+      shader.fragmentShader='varying vec3 riverSurface;\nuniform float riverMistTime;\n'
+        +riverShore.mistShader+shader.fragmentShader.replace(
         '#include <fog_fragment>',
         `#include <fog_fragment>
         #ifdef USE_FOG
@@ -182,6 +186,8 @@
           float mistDensity=exp(-.64*mix(airHeight,surfaceHeight,.69));
           float mistAmount=(1.-exp(-.018*mistDepth*mistDensity))*.72;
           gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor,mistAmount);
+          float groundMist=lowRiverMist(cameraPosition,riverSurface,${waterLevel.toFixed(2)},riverMistTime);
+          gl_FragColor.rgb=mix(gl_FragColor.rgb,vec3(.049,.075,.107),groundMist);
         #endif`
       );
     }
@@ -261,7 +267,8 @@
     const reflectionClip=[new T.Plane(new T.Vector3(0,1,0),-waterLevel+.018)];
     const reflectionPixel=new T.Vector2();
     const [ex,ez]=end;
-    const entryThresholdZ=rooms[0].z+rooms[0].depth/2;
+    const boatBerth={x:arrivalDock[0]+2.48,z:entryThresholdZ+2.25};
+    const boatWaterFrame={value:new T.Vector4(boatBerth.x,boatBerth.z,1,0)};
     const moorings=[...rooms,{x:ex,z:ez,width:landingWidth,depth:landingDepth},
       {x:arrivalDock[0],z:(arrivalDock[1]+entryThresholdZ)/2,width:bridges[0].width,depth:bridges[0].length}];
     const wakeX=Math.min(...moorings.map(room=>room.x-room.width/2))-1.2;
@@ -297,7 +304,7 @@
       extensions:{derivatives:true},
       uniforms:{...photoUniforms,reflectionPixel:{value:reflectionPixel},poolProjection:{value:poolMatrix},reflectedView:{value:reflection.texture},projection:{value:reflectionMatrix},time:nightTime,
         riverBankProfile:{value:shore.profile},pileWakes:{value:pileWakes},wakeBounds:{value:wakeBounds},moonDirection,
-        portraitLight:{value:0},navy:{value:color('#02060d')}},
+        boatWaterFrame,portraitLight:{value:0},navy:{value:color('#02060d')}},
       vertexShader:`uniform mat4 projection;varying vec4 reflected;varying vec3 world;
         void main(){vec4 p=modelMatrix*vec4(position,1.);world=p.xyz;reflected=projection*p;
         gl_Position=projectionMatrix*viewMatrix*p;}`,
@@ -306,7 +313,7 @@
         ${riverShore.mistShader}
         uniform mat4 poolProjection;
         uniform sampler2D reflectedView,pileWakes;
-        uniform vec4 wakeBounds;
+        uniform vec4 wakeBounds,boatWaterFrame;
         uniform float time,portraitLight;
         uniform vec3 navy,moonDirection;
         uniform vec2 reflectionPixel;
@@ -365,6 +372,13 @@
           float pileLap=smoothstep(.04,.26,contact)*(1.-smoothstep(.61,.77,contact))
                         *sin(pilePhase)*resolveWave(pilePhase);
           waveSlope+=.020*shoreLap*gradientAtWater(bank,p)-.027*pileLap*gradientAtWater(contact,p);
+          vec2 fromBoat=p-boatWaterFrame.xy;
+          vec2 bearing=boatWaterFrame.zw;
+          vec2 besideBoat=vec2(dot(fromBoat,bearing),dot(fromBoat,vec2(-bearing.y,bearing.x)));
+          float boatEdge=length(besideBoat/vec2(.58,1.48));
+          float lapping=(1.-smoothstep(1.06,1.82,boatEdge))*smoothstep(.86,1.06,boatEdge);
+          float boatPhase=16.*(boatEdge-1.)-time*1.37+bend*.24;
+          waveSlope+=.031*lapping*sin(boatPhase)*resolveWave(boatPhase)*gradientAtWater(boatEdge,p);
 
           float still=portraitLight*(1.-smoothstep(3.,13.,abs(p.x+2.)))*smoothstep(202.,208.,-p.y);
           vec2 uv=.5+.5*reflected.xy/reflected.w;
@@ -391,9 +405,13 @@
           vec3 silt=vec3(.011,.017,.019);
           vec3 deepWater=mix(navy,silt,shallows*.20);
           vec3 river=mix(deepWater,lights+skyGlints,fresnel);
-          float bankHaze=mix(.54,1.,1.-smoothstep(2.,19.,bank));
+          vec2 berthDistance=fromBoat*vec2(.22,.15);
+          float berth=exp(-dot(berthDistance,berthDistance));
+          float rippleGlints=smoothstep(.80,1.11,.66*midSlope+.39*crossSlope+.24*capSlope);
+          float glintBreakup=.46+.54*lakeNoise(p*vec2(.72,1.7));
+          river+=vec3(.034,.057,.094)*berth*rippleGlints*glintBreakup*(.037+.40*fresnel);
           float haze=lowRiverMist(cameraPosition,world,${waterLevel.toFixed(2)},time);
-          river=mix(river,vec3(.042,.065,.095),haze*bankHaze*.44*(1.-still));
+          river=mix(river,vec3(.049,.075,.107),haze*(1.-still));
         if(still>.001){
           vec4 projected=poolProjection*vec4(world,1.);
           vec2 q=projected.xy/projected.w*.5+.5;
@@ -752,6 +770,97 @@
           normal=normalize(max(abs(railDet),1e-7)*normal-railSlope);
         `);
     }
+    function finishBoatBoards(shader,finish){
+      const isHull=finish!=='fittings',paintedHull=finish==='paint';
+      shader.fragmentShader=`
+        float boatHash(vec2 p){
+          return fract(52.9829189*fract(dot(p,vec2(.06711056,.00583715))));
+        }
+        float boatNoise(vec2 p){
+          vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+          return mix(mix(boatHash(i),boatHash(i+vec2(1.,0.)),f.x),
+                     mix(boatHash(i+vec2(0.,1.)),boatHash(i+vec2(1.,1.)),f.x),f.y);
+        }
+      `+shader.fragmentShader.replace('#include <map_fragment>',`
+        ${isHull?`
+          float course=vUv.y*5.0;
+          float row=floor(course);
+          float across=fract(course);
+          vec2 oakUV=vec2(row*.217+.09+across*.17,vUv.x*4.1+row*.29);
+          float caulk=min(across,1.-across);
+          float plankSeam=1.-smoothstep(.013,.057+fwidth(course)*.55,caulk);
+          float lap=smoothstep(.032,.107,across)*(1.-smoothstep(.107,.198,across));
+          float boardTone=boatHash(vec2(row,2.));
+        `:`
+          vec2 oakUV=vec2(.24+vUv.x*.48,vUv.y*1.07);
+          float plankSeam=0.,lap=0.,boardTone=.56;
+        `}
+        vec3 oak=texture2D(map,oakUV).rgb;
+        float oakGrain=dot(oak,vec3(.29,.58,.13));
+        vec3 woodColor=mapTexelToLinear(vec4(oak,1.)).rgb;
+        float paintChip=0.;
+        ${paintedHull?`
+          float paintWear=.59*boatNoise(vUv*vec2(43.,15.))
+                       +.26*boatNoise(vUv*vec2(121.,51.))
+                       +.15*boatNoise(vUv*vec2(390.,103.));
+          float scrapes=boatNoise(vUv*vec2(28.,71.));
+          float wetStain=1.-smoothstep(.019,.16,abs(riverSurface.y-(${waterLevel.toFixed(2)})));
+          paintChip=smoothstep(.69,.79,paintWear+lap*.093+wetStain*.055+(scrapes-.5)*.22);
+          vec3 enamel=diffuseColor.rgb*mix(.66,1.31,smoothstep(.13,.72,oakGrain));
+          diffuseColor.rgb=mix(enamel,woodColor*vec3(1.10,.78,.55),paintChip*.94);
+        `:`
+          diffuseColor.rgb*=woodColor*vec3(1.72,1.33,1.04);
+        `}
+        diffuseColor.rgb*=mix(.76,1.21,boardTone)*(1.-.64*plankSeam)*(1.+.17*lap);
+      `).replace('#include <roughnessmap_fragment>',`
+        #include <roughnessmap_fragment>
+        roughnessFactor=clamp(roughnessFactor+.33*(.53-oakGrain)+.17*paintChip+.12*plankSeam-.08*lap,.38,.93);
+      `).replace('#include <normal_fragment_maps>',`
+        #include <normal_fragment_maps>
+        vec3 boatDx=dFdx(-vViewPosition),boatDy=dFdy(-vViewPosition);
+        vec3 boatTx=cross(boatDy,normal),boatTy=cross(normal,boatDx);
+        float boatDet=dot(boatDx,boatTx);
+        float timberRelief=.0034*oakGrain-.0026*plankSeam+.0015*lap-.0009*paintChip;
+        vec3 boatSlope=sign(boatDet)*(boatTx*dFdx(timberRelief)+boatTy*dFdy(timberRelief));
+        boatSlope*=min(1.,.46*abs(boatDet)/max(length(boatSlope),1.e-7));
+        normal=normalize(max(abs(boatDet),1.e-7)*normal-boatSlope);
+      `);
+    }
+    function receiveBoatShadows(shader){
+      shader.uniforms.boatBakedDepth={value:boatShadowAtlas.texture};
+      shader.uniforms.boatBakedProjection={value:boatShadowMatrices};
+      shader.fragmentShader=shader.fragmentShader.replace('#include <packing>',`
+        #include <packing>
+        uniform sampler2D boatBakedDepth;
+        uniform mat4 boatBakedProjection[4];
+        float boatVisibility(vec4 projected,vec2 tile){
+          vec3 q=projected.xyz/projected.w*.5+.5;
+          if(any(lessThan(q,vec3(.008))) || any(greaterThan(q,vec3(.992))))return 1.;
+          vec2 uv=(tile+q.xy)*.5;
+          float receiver=q.z-.0016;
+          float clearDepth=unpackRGBAToDepth(texture2D(boatBakedDepth,uv));
+          float visible=step(receiver,clearDepth);
+          const float texel=1.45/${boatShadowAtlas.width.toFixed(1)};
+          for(int i=0;i<4;i++){
+            vec2 tap=vec2(i<2?-1.:1.,mod(float(i),2.)<.5?-1.:1.)*texel;
+            float blocker=unpackRGBAToDepth(texture2D(boatBakedDepth,uv+tap));
+            visible+=step(receiver,blocker);
+          }
+          return visible*.20;
+        }
+      `).replace('#include <lights_fragment_end>',`
+        #include <lights_fragment_end>
+        vec4 boatPoint=vec4(riverSurface,1.);
+        float lanternShadow=boatVisibility(boatBakedProjection[0]*boatPoint,vec2(0.,0.));
+        float boatSky=(boatVisibility(boatBakedProjection[1]*boatPoint,vec2(1.,0.))
+          +boatVisibility(boatBakedProjection[2]*boatPoint,vec2(0.,1.))
+          +boatVisibility(boatBakedProjection[3]*boatPoint,vec2(1.,1.)))/3.;
+        reflectedLight.directDiffuse*=mix(.43,1.,lanternShadow);
+        reflectedLight.directSpecular*=mix(.27,1.,lanternShadow);
+        reflectedLight.indirectDiffuse*=mix(.42,1.,boatSky);
+        reflectedLight.indirectSpecular*=mix(.56,1.,boatSky);
+      `);
+    }
     function lightArchitecture(materials){
       // Each strip of the river knows every lamp that can reach it. Picking
       // lights at the surface keeps the galleries lit from every viewpoint.
@@ -787,11 +896,13 @@
         const isPrint=material===photoMat,isMat=material===linen,isDeck=material===timber;
         const isFrame=material===frameOak;
         const grainFinish=joineryFinishes.get(material);
+        const boatFinish=boatFinishes.get(material);
         const isDeckTrim=material===headerPlank || material===walkwayTrim;
-        const exterior=isStone || isDeck || isDeckTrim || (grainFinish && !grainFinish.timber && material!==uprightCedar);
+        const receivesDockContact=isDeck || isDeckTrim || isStone;
+        const exterior=isStone || isDeck || isDeckTrim || boatFinish || (grainFinish && !grainFinish.timber && material!==uprightCedar);
         const profile=isGateCap?'slate-ledge':isStone?'stone':isPrint?'print':isMat?'mat':isFrame?'frame':isDeck?'deck':isDeckTrim?'deck-trim':'lanterns';
         material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant()+(movingEnabled?'-moving':'')
-          +(grainFinish?'-joinery-'+material.id:exterior?'-exterior':'');
+          +(grainFinish?'-joinery-'+material.id:exterior?'-exterior':'')+(boatFinish?'-boat-'+boatFinish:'');
         material.onBeforeCompile=shader=>{
           const variant=shadowVariant(),castShadows=variant!=='off';
           addRiverMist(shader);
@@ -900,6 +1011,25 @@
             float wetEdge=.14+.022*sin(riverSurface.x*7.1+riverSurface.z*3.8);
             float wetness=1.-smoothstep(.022,wetEdge,waterHeight);
             diffuseColor.rgb*=mix(vec3(1.),vec3(.56,.66,.73),wetness);
+            ${isDeck || isDeckTrim?`
+              float dockDamp=(1.-smoothstep(1.7,3.9,abs(riverSurface.z-(${boatBerth.z.toFixed(2)}))))
+                *smoothstep(.61,1.48,riverSurface.x-(${arrivalDock[0].toFixed(2)}))
+                *(1.-smoothstep(1.60,1.78,riverSurface.x-(${arrivalDock[0].toFixed(2)})));
+              diffuseColor.rgb*=mix(vec3(1.),vec3(.82,.85,.89),dockDamp*${isDeckTrim?'.92':'.68'});
+            `:''}
+            ${receivesDockContact?`
+              vec2 postShape=abs(riverSurface.xz-vec2(${cleat.x.toFixed(2)},${cleat.z.toFixed(2)}))-.097;
+              float postDistance=length(max(postShape,vec2(0.)));
+              float postCrease=1.-smoothstep(.004,.107,postDistance);
+              const float wallEnd=${(rooms[0].width/2-pavilionInset).toFixed(3)};
+              float wingX=abs(riverSurface.x-(${arrivalDock[0].toFixed(2)}));
+              float wingRun=max(1.63-wingX,wingX-wallEnd);
+              float wingDepth=abs(riverSurface.z-(${(entryThresholdZ-pavilionInset).toFixed(3)}))-.16;
+              float wallDistance=length(max(vec2(wingRun,wingDepth),vec2(0.)));
+              float wallCrease=1.-smoothstep(.013,.121,wallDistance);
+              float atJoin=1.-smoothstep(.005,.082,abs(riverSurface.y));
+              float dockOcclusion=(1.-(1.-postCrease*.76)*(1.-wallCrease*.69))*atJoin;
+            `:''}
           `).replace('#include <roughnessmap_fragment>',`
             #include <roughnessmap_fragment>
             roughnessFactor=mix(roughnessFactor,${isStone?'.39':'.31'},wetness*.74);
@@ -985,6 +1115,7 @@
               #include <roughnessmap_fragment>
               roughnessFactor=clamp(.66+(.45*(roughnessFactor-.62))+.15*plankVariance*detail
                                     +.32*(boardGrain.g-.56)-.13*dampEdge,.43,.91);
+              roughnessFactor=mix(roughnessFactor,.40,dockDamp*(.24+.50*boardGrain.g));
             `).replace('#include <normal_fragment_maps>',`
               #include <normal_fragment_maps>
               vec3 boardDx=dFdx(-vViewPosition),boardDy=dFdy(-vViewPosition);
@@ -1021,6 +1152,7 @@
               float trimFinish=roughness*texture2D(roughnessMap,trimUV).g;
               float roughnessFactor=clamp(.66+.45*(trimFinish-.62)+.32*(trimGrain.g-.56),.43,.91);
               roughnessFactor=mix(roughnessFactor,.31,wetness*.74);
+              roughnessFactor=mix(roughnessFactor,.35,dockDamp*.58);
             `).replace('#include <normal_fragment_maps>',`
               float trimRelief=bumpScale*texture2D(bumpMap,trimUV).r+.0058*trimGrain.r;
               normal=perturbNormalArb(-vViewPosition,normal,vec2(dFdx(trimRelief),dFdy(trimRelief)),faceDirection);
@@ -1050,6 +1182,12 @@
               diffuseColor.rgb*=mapTexelToLinear(grain).rgb*mix(vec3(${isGateCap?'.57,.62,.67':'.72,.78,.86'}),
                                vec3(${isGateCap?'1.44,1.46,1.49':'1.32,1.33,1.36'}),mottle)
                                *(1.+worn*riverEdgeWear)*(1.-.19*atStoneFoot);
+              float dockWall=(1.-smoothstep(.18,.42,abs(riverSurface.z-(${(entryThresholdZ-.245).toFixed(3)}))))
+                *smoothstep(1.56,2.06,riverSurface.x-(${arrivalDock[0].toFixed(2)}))
+                *(1.-smoothstep(4.64,5.08,riverSurface.x-(${arrivalDock[0].toFixed(2)})));
+              float moss=(1.-smoothstep(.045,.17+.20*mottle,riverSurface.y))
+                *dockWall*smoothstep(.34,.71,.65*pores.g+.35*grain.b);
+              diffuseColor.rgb=mix(diffuseColor.rgb,diffuseColor.rgb*vec3(.86,1.32,.66)+vec3(.011,.013,.004),moss*.64);
             `).replace('#include <roughnessmap_fragment>',`
               #include <roughnessmap_fragment>
               roughnessFactor=clamp(roughnessFactor+(.64-grain.g)*.25+(pores.g-.60)*.30-worn*.095,.51,.96);
@@ -1065,6 +1203,14 @@
             `);
           }
           if(grainFinish)finishJoinery(shader,grainFinish);
+          if(boatFinish)finishBoatBoards(shader,boatFinish);
+          if(boatFinish && boatFinish!=='paint')receiveBoatShadows(shader);
+          if(receivesDockContact)shader.fragmentShader=shader.fragmentShader.replace('#include <lights_fragment_end>',`
+            #include <lights_fragment_end>
+            reflectedLight.indirectDiffuse*=1.-dockOcclusion*.85;
+            reflectedLight.indirectSpecular*=1.-dockOcclusion*.61;
+            reflectedLight.directDiffuse*=1.-dockOcclusion*.30;
+          `);
           if(exterior){
             shader.fragmentShader=shader.fragmentShader.replace('#include <lights_fragment_maps>',`
               #include <lights_fragment_maps>
@@ -2226,15 +2372,25 @@
       for(const dz of [-1.68,1.68])deckPile(end[0]+side*2.98,end[1]+dz);
       lantern(end[0]+side*3.10,1.06,end[1]-1.66,.96,true);
     }
-    const rowboatMooring=new T.Vector3(arrivalDock[0]+1.40,.218,entryThresholdZ+1.15);
-    batch(trim,railWood,rowboatMooring.x,.10,rowboatMooring.z,.16,.20,.16);
-    batch(trim,railCap,rowboatMooring.x,.207,rowboatMooring.z,.198,.036,.198);
+    const rowboatMooring=new T.Vector3(cleat.x+.111,.218,cleat.z+.016);
+    batch(trim,uprightCedar,cleat.x,.149,cleat.z,.194,.298,.194);
+    batch(trim,railCap,cleat.x,.302,cleat.z,.23,.040,.23);
+    blockWalking(cleat.x,cleat.z,.194,.194);
+    const boatOak=(timberPaint || cedarMap).clone();
+    boatOak.encoding=T.sRGBEncoding;
+    boatOak.wrapS=boatOak.wrapT=T.MirroredRepeatWrapping;
+    boatOak.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+    boatOak.needsUpdate=true;
     const boatPaint=new T.MeshStandardMaterial({
-      color:color('#557780'),roughness:.59,roughnessMap:cedarFinish,bumpMap:cedarMap,bumpScale:.012
+      map:boatOak,color:color('#516979'),roughness:.61
     });
     const boatInside=boatPaint.clone();
-    boatInside.color.copy(color('#926e52'));boatInside.roughness=.77;
-    const ropeMaterial=new T.MeshStandardMaterial({color:color('#ad9066'),roughness:.92});
+    boatInside.color.copy(color('#e3cdb8'));boatInside.roughness=.72;
+    const boatWood=boatInside.clone();
+    boatWood.color.copy(color('#edded0'));boatWood.roughness=.61;
+    const boatPaddle=boatWood.clone();
+    boatPaddle.color.copy(color('#fff5e7'));boatPaddle.roughness=.51;
+    const boatFinishes=new Map([[boatPaint,'paint'],[boatInside,'strakes'],[boatWood,'fittings'],[boatPaddle,'fittings']]);
     const rowboat=new T.Group();
     rowboat.name='Entrance rowboat';
     const hullOutline=new T.CatmullRomCurve3([
@@ -2249,11 +2405,12 @@
     ];
     const hullPoints=hullOutline.getPoints(hullSteps);
     const hullPositions=[],hullUV=[],hullIndices=[];
+    const hullCourse=[0,.19,.50,1,.98,.53,0];
     for(const [ring,[width,length,height]] of hullSection.entries()){
       for(const [i,edge] of hullPoints.entries()){
         const y=ring===hullSection.length-1?-.078:T.MathUtils.lerp(-.25,edge.y,height);
         hullPositions.push(edge.x*width,y,edge.z*length);
-        hullUV.push(i/hullSteps*4,ring*.39);
+        hullUV.push(i/hullSteps,hullCourse[ring]);
       }
     }
     const hull=new T.BufferGeometry();
@@ -2267,49 +2424,189 @@
     }
     for(const [ring,y,material] of [[0,-.25,0],[hullSection.length-1,-.078,1]]){
       const start=hullIndices.length,center=hullPositions.length/3;
-      hullPositions.push(0,y,0);hullUV.push(2,0);
-      for(let i=0;i<hullSteps;i++){
-        const a=ring*(hullSteps+1)+i;
-        hullIndices.push(center,material?a+1:a,material?a:a+1);
+      hullPositions.push(0,y,0);hullUV.push(.5,.5);
+      for(let i=0;i<=hullSteps;i++){
+        const edge=hullPoints[i],x=edge.x*hullSection[ring][0],z=edge.z*hullSection[ring][1];
+        hullPositions.push(x,y,z);hullUV.push(.5+x,.5+z*.35);
+        if(i>0)hullIndices.push(center,material?center+i+1:center+i,material?center+i:center+i+1);
       }
-      hull.addGroup(start,hullIndices.length-start,material);
+      hull.addGroup(start,hullIndices.length-start,material?2:0);
     }
     hull.setAttribute('position',new T.Float32BufferAttribute(hullPositions,3));
     hull.setAttribute('uv',new T.Float32BufferAttribute(hullUV,2));
     hull.setIndex(hullIndices);hull.computeVertexNormals();
-    rowboat.add(reflected(new T.Mesh(hull,[boatPaint,boatInside])));
-    rowboat.add(reflected(new T.Mesh(new T.TubeGeometry(hullOutline,hullSteps,.025,8,true),railWood)));
+    rowboat.add(reflected(new T.Mesh(hull,[boatPaint,boatInside,boatWood])));
+    rowboat.add(reflected(new T.Mesh(new T.TubeGeometry(hullOutline,hullSteps,.024,8,true),boatWood)));
+    function hullCrossing(z,ring){
+      const stride=hullSteps+1;
+      let x=0,y=0;
+      for(let i=0;i<hullSteps;i++){
+        const a=(ring*stride+i)*3,b=a+3,az=hullPositions[a+2],bz=hullPositions[b+2];
+        if(az===bz || (z-az)*(z-bz)>0)continue;
+        const t=(z-az)/(bz-az);
+        const reach=T.MathUtils.lerp(hullPositions[a],hullPositions[b],t);
+        if(reach<=x)continue;
+        x=reach;y=T.MathUtils.lerp(hullPositions[a+1],hullPositions[b+1],t);
+      }
+      return [x,y];
+    }
+    function boatRib(z){
+      const right=[4,5,6].map(ring=>hullCrossing(z,ring));
+      const contour=[...right,[0,-.078],...right.slice().reverse().map(([x,y])=>[-x,y])];
+      const shape=new T.Shape();
+      contour.forEach(([x,y],i)=>{
+        if(i===0)shape.moveTo(x+.003,y-.018);
+        else shape.lineTo(x*1.01,y-.015);
+      });
+      for(const [x,y] of contour.slice().reverse())shape.lineTo(x*.943,y+.027);
+      shape.closePath();
+      const rib=new T.Mesh(new T.ExtrudeGeometry(shape,{
+        depth:.035,bevelEnabled:true,bevelSize:.0035,bevelThickness:.0035,bevelSegments:1
+      }),boatWood);
+      rib.position.z=z-.0175;
+      rowboat.add(reflected(rib));
+    }
+    for(const z of [-1.16,-.85,-.54,-.22,.11,.45,.79,1.12])boatRib(z);
     function boatTimber(x,y,z,w,h,d){
-      const timber=new T.Mesh(trim,railWood);
+      const timber=new T.Mesh(trim,boatWood);
       timber.position.set(x,y,z);timber.scale.set(w,h,d);
       rowboat.add(reflected(timber));
     }
+    for(let i=-2;i<=2;i++){
+      const length=2.18-Math.abs(i)*.24;
+      boatTimber(i*.119,-.057,.045,.112,.025,length);
+    }
     for(const z of [-.43,.69]){
-      boatTimber(0,.115,z,.97,.051,.26);
+      for(const offset of [-.064,.064])boatTimber(0,.115,z+offset,.97,.051,.122);
       for(const side of [-1,1])boatTimber(side*.426,.052,z,.075,.115,.21);
     }
-    const oarShaft=new T.CylinderGeometry(.021,.017,1.45,8);
+    const paddleShape=new T.Shape();
+    paddleShape.moveTo(-.023,.56);
+    paddleShape.quadraticCurveTo(-.032,.69,-.066,.79);
+    paddleShape.lineTo(-.072,1.02);
+    paddleShape.quadraticCurveTo(0,1.044,.072,1.02);
+    paddleShape.lineTo(.066,.79);
+    paddleShape.quadraticCurveTo(.032,.69,.023,.56);
+    paddleShape.closePath();
+    const paddleGeometry=new T.ExtrudeGeometry(paddleShape,{
+      depth:.014,bevelEnabled:true,bevelThickness:.004,bevelSize:.004,bevelSegments:2,curveSegments:8
+    });
+    paddleGeometry.translate(0,0,-.007).rotateX(Math.PI/2);
+    const oarShaft=new T.CylinderGeometry(.021,.016,1.45,10);
+    const lockZ=.11,[lockX,lockY]=hullCrossing(lockZ,3);
+    const forkShape=new T.CatmullRomCurve3([
+      [0,.064,-.052],[0,.035,-.046],[0,.018,-.027],[0,.012,0],
+      [0,.018,.027],[0,.038,.046],[0,.070,.049]
+    ].map(([x,y,z])=>new T.Vector3(x,y,z)));
+    const oarlock=new T.TubeGeometry(forkShape,18,.008,7,false);
+    const oarlockPin=new T.CylinderGeometry(.016,.019,.084,10);
     for(const side of [-1,1]){
+      const fitting=new T.Mesh(oarlock,postBand);
+      fitting.position.set(side*lockX,lockY+.036,lockZ);
+      const socket=new T.Mesh(oarlockPin,postBand);
+      socket.position.set(side*lockX,lockY,lockZ);
+      rowboat.add(reflected(fitting),reflected(socket));
       const oar=new T.Group();
-      oar.position.set(side*.15,.162,.045);oar.rotation.y=side*.14;
-      const shaft=new T.Mesh(oarShaft,railWood);
+      oar.position.set(side*.15,.165,.045);oar.rotation.y=side*.14;
+      const shaft=new T.Mesh(oarShaft,boatWood);
       shaft.rotation.x=Math.PI/2;
-      const blade=new T.Mesh(trim,boatInside);
-      blade.position.z=.82;blade.scale.set(.143,.026,.37);
+      const blade=new T.Mesh(paddleGeometry,boatPaddle);
       oar.add(reflected(shaft),reflected(blade));rowboat.add(oar);
     }
     scene.add(rowboat);
+    const ropeFibre=painted(128,(ctx,n)=>{
+      const pixels=ctx.createImageData(n,n);
+      for(let y=0;y<n;y++)for(let x=0;x<n;x++){
+        const u=x/n,v=y/n;
+        const twist=.5+.5*Math.cos(fullTurn*(3*u-5*v+.015*Math.sin(9*fullTurn*v)));
+        const grain=Math.sin(fullTurn*(25*u-42*v))*.057+Math.cos(fullTurn*(37*u+27*v))*.039;
+        const light=.58+.34*Math.pow(twist,.64)+grain,i=(y*n+x)*4;
+        pixels.data.set([214*light,184*light,139*light,255],i);
+      }
+      ctx.putImageData(pixels,0,0);
+    });
+    ropeFibre.wrapS=ropeFibre.wrapT=T.RepeatWrapping;
+    ropeFibre.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
+    const ropeMaterial=new T.MeshStandardMaterial({map:ropeFibre,bumpMap:ropeFibre,bumpScale:.0022,roughness:.86});
+    function hempRope(path,radius,segments,closed=false){
+      const geometry=new T.TubeGeometry(path,segments,radius,7,closed),uv=geometry.attributes.uv;
+      const repeats=path.getLength()/.11;
+      for(let i=0;i<uv.count;i++)uv.setXY(i,uv.getY(i),uv.getX(i)*repeats);
+      return reflected(new T.Mesh(geometry,ropeMaterial));
+    }
+    const gunwaleCord=new T.CatmullRomCurve3(hullOutline.points.map(edge=>
+      new T.Vector3(edge.x*1.041,edge.y+.015,edge.z*1.012)),true);
+    rowboat.add(hempRope(gunwaleCord,.014,72,true));
+    const coilPoints=Array.from({length:37},(_,i)=>{
+      const t=i/36,angle=(t-1)*fullTurn*1.55;
+      const x=Math.cos(angle),z=Math.sin(angle);
+      const reach=.110/Math.max(Math.abs(x),Math.abs(z));
+      return new T.Vector3(cleat.x+x*reach,.126+t*.081,cleat.z+z*reach);
+    });
+    coilPoints.push(rowboatMooring.clone());
+    scene.add(hempRope(new T.CatmullRomCurve3(coilPoints),.012,64));
+    const hitch=new T.CatmullRomCurve3([
+      [0,0,0],[-.024,.024,.020],[-.034,.005,.052],[.003,-.017,.041],
+      [.009,-.027,.011],[-.016,-.046,.017],[-.042,-.064,.026]
+    ].map(([x,y,z])=>new T.Vector3(x,y,z).add(rowboatMooring)));
+    scene.add(hempRope(hitch,.010,27));
+    for(const spread of [-1,0,1]){
+      const tail=hitch.points.at(-1).clone();
+      const strand=new T.CatmullRomCurve3([tail,tail.clone().add(new T.Vector3(-.014,-.016,spread*.008)),
+        tail.clone().add(new T.Vector3(-.027,-.032,spread*.014))]);
+      scene.add(hempRope(strand,.0026,6));
+    }
+    const bowEye=new T.Mesh(new T.TorusGeometry(.023,.006,8,18),postBand);
+    bowEye.position.set(0,.385,-1.60);rowboat.add(reflected(bowEye));
+    const boatShadowAtlas=new T.WebGLRenderTarget(640,640,{
+      minFilter:T.NearestFilter,magFilter:T.NearestFilter
+    });
+    const boatShadowInverse=new T.Matrix4();
+    const boatShadowMatrices=Array.from({length:4},()=>new T.Matrix4());
+    function bakeBoatShadows(){
+      const target=renderer.getRenderTarget();
+      const clear=renderer.getClearColor(new T.Color()).clone(),alpha=renderer.getClearAlpha();
+      const shadowScene=new T.Scene();
+      shadowScene.background=new T.Color(0xffffff);
+      shadowScene.overrideMaterial=new T.MeshDepthMaterial({depthPacking:T.RGBADepthPacking,side:T.DoubleSide});
+      shadowScene.add(rowboat.clone(true));
+      const light=new T.OrthographicCamera(-1.85,1.85,1.85,-1.85,.1,10);
+      const directions=[[-1.32,3.10,-2.50],[-1.68,3.8,.88],[1.65,3.7,.94],[.67,3.8,-1.28]];
+      boatShadowAtlas.scissorTest=true;
+      const tile=boatShadowAtlas.width/2;
+      try{
+        return directions.map(([x,y,z],i)=>{
+          light.position.set(x,y,z).normalize().multiplyScalar(4.8);
+          light.lookAt(0,0,0);light.updateMatrixWorld();
+          boatShadowAtlas.viewport.set(i%2*tile,Math.floor(i/2)*tile,tile,tile);
+          boatShadowAtlas.scissor.copy(boatShadowAtlas.viewport);
+          renderer.setRenderTarget(boatShadowAtlas);
+          renderer.render(shadowScene,light);
+          return new T.Matrix4().multiplyMatrices(light.projectionMatrix,light.matrixWorldInverse);
+        });
+      }finally{
+        renderer.setRenderTarget(target);
+        renderer.setClearColor(clear,alpha);
+        shadowScene.overrideMaterial.dispose();
+      }
+    }
+    // The fittings are rigid relative to the boat. Render their depth once in
+    // boat space, then move the projection with the hull as it rocks.
+    const boatShadowCameras=bakeBoatShadows();
     const ropeSegments=12;
     const rope=new T.InstancedMesh(new T.CylinderGeometry(.012,.012,1,6),ropeMaterial,ropeSegments);
     rope.instanceMatrix.setUsage(T.DynamicDrawUsage);rope.frustumCulled=false;scene.add(reflected(rope));
     const ropePart=new T.Object3D(),ropePrevious=new T.Vector3(),ropeNext=new T.Vector3();
     const ropeEnd=new T.Vector3(),ropeAxis=new T.Vector3(),ropeUp=new T.Vector3(0,1,0);
     function updateRowboat(time){
-      rowboat.position.set(arrivalDock[0]+2.48+.034*Math.sin(time*.61),
-        waterLevel+.18+.036*Math.sin(time*1.37),entryThresholdZ+2.25+.028*Math.cos(time*.81));
+      rowboat.position.set(boatBerth.x+.034*Math.sin(time*.61),
+        waterLevel+.18+.036*Math.sin(time*1.37),boatBerth.z+.028*Math.cos(time*.81));
       rowboat.rotation.set(.022*Math.sin(time*1.05),.046+.022*Math.sin(time*.58),.046*Math.sin(time*1.17+.7));
       rowboat.updateMatrixWorld(true);
-      ropeEnd.set(0,.385,-1.60).applyMatrix4(rowboat.matrixWorld);
+      boatShadowInverse.copy(rowboat.matrixWorld).invert();
+      boatShadowMatrices.forEach((matrix,i)=>matrix.multiplyMatrices(boatShadowCameras[i],boatShadowInverse));
+      boatWaterFrame.value.set(rowboat.position.x,rowboat.position.z,Math.cos(rowboat.rotation.y),-Math.sin(rowboat.rotation.y));
+      ropeEnd.copy(bowEye.position).applyMatrix4(rowboat.matrixWorld);
       ropePrevious.copy(rowboatMooring);
       for(let i=0;i<ropeSegments;i++){
         const t=(i+1)/ropeSegments;
@@ -2416,7 +2713,7 @@
     }
     const architectureMaterials=[stone,edge,bronze,plinth,linen,frameOak,photoMat,pictureMetal,pictureBrass,frameScrew,timber,blueTiles,
       cedar,uprightCedar,crossTimber,rafterTimber,slatWood,gateWood,gateLedge,timberSocket,ironPeg,postBand,lanternIron,walkwayTrim,headerPlank,
-      railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar,boatPaint,boatInside,ropeMaterial];
+      railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar,boatPaint,boatInside,boatWood,boatPaddle,ropeMaterial];
     if(supportsShadows)shadowValues=riverShadows.uniforms(T,rooms,shadowLamps,moonDirection.value);
     lightArchitecture(architectureMaterials);
     function architectureBoxes(){
@@ -2696,8 +2993,8 @@
       try{
         if(mode>0){
           const [mask,depth]=await Promise.all([
-            loadShadowTexture('river-shadow-mask.png?v=entrance-dock'),
-            mode>1?loadShadowTexture('river-shadow-depth.png?v=entrance-dock',true):null
+            loadShadowTexture('river-shadow-mask.png?v=weathered-mooring'),
+            mode>1?loadShadowTexture('river-shadow-depth.png?v=weathered-mooring',true):null
           ]);
           if(selection!==shadowSelection)return;
           shadowValues.riverShadowMask.value=mask;

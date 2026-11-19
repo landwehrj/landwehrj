@@ -67,13 +67,31 @@ const riverShore = (() => {
   `;
   const mistShader=`
     float lowRiverMist(vec3 eye,vec3 surface,float waterY,float time){
-      float nearHeight=max(0.,eye.y-waterY),farHeight=max(0.,surface.y-waterY);
-      float separation=abs(nearHeight-farHeight)*1.48;
-      float column=exp(-min(nearHeight,farHeight)*1.48)
-                 *(1.-exp(-max(.002,separation)))/max(.002,separation);
-      vec2 air=mix(eye.xz,surface.xz,.76)+time*vec2(.07,-.036);
-      float drift=.63+.25*sin(air.y*.119+air.x*.183)+.12*sin(air.y*.46-air.x*.23);
-      return 1.-exp(-max(0.,distance(eye,surface)-4.)*column*drift*.053);
+      float ceiling=waterY+1.32;
+      if(min(eye.y,surface.y)>ceiling || max(eye.y,surface.y)<waterY)return 0.;
+      vec3 ray=surface-eye;
+      float dist=length(ray);
+      if(dist<=2.)return 0.;
+      float entry=0.,exit=1.;
+      if(abs(ray.y)>.0001){
+        vec2 crossing=(vec2(waterY,ceiling)-eye.y)/ray.y;
+        entry=max(0.,min(crossing.x,crossing.y));
+        exit=min(1.,max(crossing.x,crossing.y));
+      }
+      float density=0.;
+      for(int i=0;i<4;i++){
+        vec3 p=eye+ray*mix(entry,exit,(float(i)+.5)/4.);
+        vec2 wind=p.xz+time*vec2(.17,-.083);
+        float bands=.57+.23*sin(dot(wind,vec2(.21,.15)))
+          +.15*sin(dot(wind,vec2(-.14,.47))+p.y*4.3)
+          +.05*sin(dot(wind,vec2(.62,-.44)));
+        float height=p.y-waterY;
+        float layer=exp(-2.72*height)*(1.-smoothstep(.68,1.32,height));
+        float valley=1.-.82*smoothstep(18.,40.,abs(p.x));
+        density+=mix(.24,1.,smoothstep(.19,.88,bands))*layer*valley;
+      }
+      float opticalDepth=.31*dist*max(0.,exit-entry)*density/4.;
+      return (1.-exp(-opticalDepth))*.68*smoothstep(2.,7.8,dist);
     }
   `;
 
@@ -447,7 +465,7 @@ const riverShore = (() => {
         if(bark)shader.vertexShader='varying vec2 barkUV;\n'+shader.vertexShader.replace(
           '#include <begin_vertex>','#include <begin_vertex>\n barkUV=uv;');
         const barkCoordinate=bark?'varying vec2 barkUV;\n':'';
-        shader.fragmentShader=barkCoordinate+mistShader+'uniform sampler2D shoreSpill,shoreGrain;\n'
+        shader.fragmentShader=barkCoordinate+'uniform sampler2D shoreSpill,shoreGrain;\n'
           +(pigment?'uniform sampler2D shorePaint;\n':'')
           +(ground?'uniform sampler2D groundContacts;\n':'')
           +'uniform float shoreTime; uniform vec3 shoreMoon;\n'+shader.fragmentShader.replace(
@@ -483,10 +501,6 @@ const riverShore = (() => {
           irradiance*=1.-.81*contactShade;
           reflectedLight.directDiffuse*=1.-.39*contactShade;
           reflectedLight.directSpecular*=1.-.48*contactShade;`:''}
-        `).replace('gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor,mistAmount);',`
-          gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor,mistAmount);
-          float pooledMist=lowRiverMist(cameraPosition,riverSurface,${litHeight},shoreTime);
-          gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor*1.61,pooledMist*.39);
         `);
         if(ground || rock || bark)shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
           #include <color_fragment>
