@@ -114,6 +114,6 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 .garden-audio{display:flex;gap:6px;justify-content:flex-end}
 #garden-shadows{pointer-events:auto;color:#fff9e9;color-scheme:dark;max-width:100%;cursor:pointer}
 #garden-shadows:focus-visible{border-color:#f0daa8;background:#234051}
-#memorial #garden-gi[aria-pressed="true"]{border-color:#cdb582;background:#263b44}
-@media(max-width:800px){.garden-audio{flex-wrap:wrap}}
+#memorial #garden-gi[aria-pressed="true"],#memorial #garden-moving-shadows[aria-pressed="true"]{border-color:#cdb582;background:#263b44}
+@media(max-width:1050px){.garden-audio{flex-wrap:wrap}}
 @media(max-width:650px){.garden-audio{flex-direction:column;gap:3px}.garden-audio .garden-pill{min-height:32px;font-size:12px}.garden-top{align-items:flex-start}.garden-top h2{align-self:flex-start;padding-top:7px}#leave-garden{white-space:nowrap}}

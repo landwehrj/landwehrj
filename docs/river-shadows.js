@@ -1,6 +1,7 @@
 const riverShadows=(() => {
   const reach=5.8,faceSize=192,bakeSize=224,textureWidth=256;
   const margin=2.4,moonStart=12,moonRange=24;
+  const movingSize=512,movingRange=4.8,movingSpread=1.3,movingLimit=2;
 
   function uniforms(T,rooms,lamps,moon){
     return {
@@ -15,8 +16,17 @@ const riverShadows=(() => {
       riverShadowMoon:{value:moon.clone().normalize()}
     };
   }
+  function movingUniforms(T,tint){
+    const vectors=()=>Array.from({length:movingLimit},()=>new T.Vector3());
+    return {
+      movingLampColor:{value:tint},movingLampPower:{value:new Float32Array(movingLimit)},
+      movingLamp:{value:vectors()},movingShadowOrigin:{value:vectors()},
+      movingShadowAxis:{value:vectors()},movingShadowAcross:{value:vectors()},movingShadowUp:{value:vectors()},
+      movingShadowDepth:{value:null}
+    };
+  }
 
-  function buildTree(T,matrices,limit){
+  function buildTree(T,matrices,limit,origin){
     if(!matrices.length)throw Error('No architecture to cast shadows');
     const unit=new T.Box3(new T.Vector3(-.5,-.5,-.5),new T.Vector3(.5,.5,.5));
     const solids=matrices.map(matrix=>{
@@ -34,7 +44,10 @@ const riverShadows=(() => {
         const axis=x>=y && x>=z?'x':y>=z?'y':'z';
         group.sort((a,b)=>a.center[axis]-b.center[axis]);
         const mid=group.length>>1;
-        visit(group.slice(0,mid));visit(group.slice(mid));
+        const low=group.slice(0,mid),high=group.slice(mid);
+        const split=(low[mid-1].center[axis]+high[0].center[axis])*.5;
+        if(origin && origin[axis]>split){visit(high);visit(low)}
+        else{visit(low);visit(high)}
       }
       node.skip=nodes.length;
     }
@@ -147,6 +160,140 @@ const riverShadows=(() => {
     vec3 moonAnchor(vec4 room){return vec3(room.x,1.65,room.y);}
     float moonRadius(vec4 room){return length(room.zw)*.92;}
   `;
+
+  function receiveMoving(shader,values){
+    Object.assign(shader.uniforms,values);
+    shader.fragmentShader=`
+      #define RIVER_MOVING_LIGHTS ${movingLimit}
+      uniform vec3 movingLamp[RIVER_MOVING_LIGHTS],movingLampColor;
+      uniform vec3 movingShadowOrigin[RIVER_MOVING_LIGHTS],movingShadowAxis[RIVER_MOVING_LIGHTS];
+      uniform vec3 movingShadowAcross[RIVER_MOVING_LIGHTS],movingShadowUp[RIVER_MOVING_LIGHTS];
+      uniform float movingLampPower[RIVER_MOVING_LIGHTS];
+      uniform sampler2D movingShadowDepth;
+
+      float movingDepth(vec2 uv,int light){
+        vec2 tile=clamp(uv,vec2(.5/${movingSize}.),vec2(1.-.5/${movingSize}.));
+        tile.x=(tile.x+float(light))/${movingLimit}.;
+        return dot(texture2D(movingShadowDepth,tile).rg,vec2(4080.,15.))*${movingRange}/4095.;
+      }
+      float movingShadow(vec3 surface,vec3 normal,int light){
+        vec3 direction=movingShadowAxis[light],across=movingShadowAcross[light],up=movingShadowUp[light];
+        vec3 delta=surface+normal*.029-movingShadowOrigin[light];
+        float forward=dot(delta,direction);
+        vec2 tile=vec2(dot(delta,across),dot(delta,up))
+                       /max(2.*${movingSpread}*forward,.001)+.5;
+        float facing=dot(delta,normal);
+        vec3 plane=vec3(dot(normal,across),dot(normal,up),dot(normal,direction));
+        vec2 grid=tile*${movingSize}.-.5;
+        vec2 base=floor(grid),fraction=fract(grid);
+        // A continuous kernel follows the receiver across texels and grows
+        // in world units with distance from the light.
+        float radius=mix(1.8,2.9,smoothstep(.65,3.,forward));
+        float visibility=0.,total=0.;
+        for(int y=-2;y<=3;y++){
+          for(int x=-2;x<=3;x++){
+            vec2 tap=vec2(float(x),float(y));
+            vec2 offset=tap-fraction;
+            float weight=max(0.,1.-dot(offset,offset)/(radius*radius));
+            if(weight<=0.)continue;
+            weight*=weight;
+            vec2 uv=(base+tap+.5)/${movingSize}.;
+            vec2 cone=(uv*2.-1.)*${movingSpread};
+            // The map stores axial depth, so compare on the same receiver plane.
+            float slope=dot(cone,plane.xy)+plane.z;
+            float expected=abs(slope)>.045 && slope*facing>0.?facing/slope:forward;
+            visibility+=weight*smoothstep(expected-.041,expected-.011,movingDepth(uv,light));
+            total+=weight;
+          }
+        }
+        return visibility/total;
+      }
+    `+shader.fragmentShader;
+  }
+
+  function createMoving(T,renderer,values,matrices,screenMaterial,drawPass){
+    const unit=new T.Box3(new T.Vector3(-.5,-.5,-.5),new T.Vector3(.5,.5,.5));
+    const bounds=new T.Box3();
+    const trees=new Map();
+    const slots=Array.from({length:movingLimit},()=>({lamp:null,time:-Infinity,power:0}));
+    const vertical=new T.Vector3(0,1,0);
+    if(movingSize*movingLimit>renderer.capabilities.maxTextureSize)throw Error('Moving shadow atlas exceeds GPU texture size');
+    const target=new T.WebGLRenderTarget(movingSize*movingLimit,movingSize,{
+      depthBuffer:false,minFilter:T.NearestFilter,magFilter:T.NearestFilter
+    });
+    target.scissorTest=true;
+    const trace={
+      riverShadowTree:{value:null},riverShadowTreeHeight:{value:1},riverShadowNodeCount:{value:0},
+      traceOrigin:{value:null},traceAxis:{value:null},traceAcross:{value:null},traceUp:{value:null},
+      traceOffset:{value:0}
+    };
+    const material=screenMaterial(trace,rayShader+cubeShader+`
+      uniform vec3 traceOrigin,traceAxis,traceAcross,traceUp;
+      uniform float traceOffset;
+      void main(){
+        vec2 plane=((gl_FragCoord.xy-vec2(traceOffset,0.))/${movingSize}.*2.-1.)*${movingSpread};
+        vec3 ray=normalize(traceAxis+traceAcross*plane.x+traceUp*plane.y);
+        float alignment=dot(ray,traceAxis);
+        float depth=${movingRange};
+        if(alignment>.55){
+          float hit=shadowHit(traceOrigin,ray,${movingRange},false);
+          if(hit<${movingRange}-.0001)depth=hit*alignment;
+        }
+        gl_FragColor=vec4(shadowPack(depth/${movingRange}),0.,1.);
+      }
+    `);
+    values.movingShadowDepth.value=target.texture;
+    let last=-Infinity;
+    const positions=values.movingLamp.value,origins=values.movingShadowOrigin.value;
+    const axes=values.movingShadowAxis.value,across=values.movingShadowAcross.value,up=values.movingShadowUp.value;
+    return {update(time,nearby){
+      for(const slot of slots)if(!nearby.some(({lamp})=>lamp===slot.lamp))slot.lamp=null;
+      for(const {lamp,power} of nearby){
+        let i=slots.findIndex(slot=>slot.lamp===lamp);
+        if(i<0){
+          i=slots.findIndex(slot=>!slot.lamp);
+          slots[i].lamp=lamp;
+          slots[i].time=-Infinity;
+          axes[i].copy(lamp.movingPath.axis);
+          across[i].crossVectors(axes[i],vertical).normalize();
+          up[i].crossVectors(axes[i],across[i]);
+        }
+        slots[i].power=power;
+        positions[i].copy(lamp.glow.position);
+      }
+      // Keep tiles assigned as the camera moves and update the oldest one first.
+      let candidate=-1;
+      slots.forEach(({lamp,time:built},i)=>{
+        if(!lamp || (built!==-Infinity && positions[i].distanceToSquared(origins[i])<.0001))return;
+        if(candidate<0 || built<slots[candidate].time)candidate=i;
+      });
+      const interval=1/(nearby.length>1?16:12);
+      if(candidate>=0 && (slots[candidate].time===-Infinity || time<last || time-last>=interval)){
+        const i=candidate,center=slots[i].lamp.movingPath.center;
+        if(!trees.has(center)){
+          const solids=matrices.filter(matrix=>bounds.copy(unit).applyMatrix4(matrix).distanceToPoint(center)<movingRange+1.7);
+          trees.set(center,buildTree(T,solids,renderer.capabilities.maxTextureSize,center));
+        }
+        const {tree,height,count}=trees.get(center);
+        origins[i].copy(positions[i]);
+        trace.riverShadowTree.value=tree;
+        trace.riverShadowTreeHeight.value=height;
+        trace.riverShadowNodeCount.value=count;
+        trace.traceOrigin.value=origins[i];
+        trace.traceAxis.value=axes[i];
+        trace.traceAcross.value=across[i];
+        trace.traceUp.value=up[i];
+        trace.traceOffset.value=i*movingSize;
+        target.viewport.set(i*movingSize,0,movingSize,movingSize);
+        target.scissor.copy(target.viewport);
+        drawPass(material,target);
+        slots[i].time=last=time;
+      }
+      slots.forEach((slot,i)=>{
+        values.movingLampPower.value[i]=slot.lamp && slot.time!==-Infinity?slot.power:0;
+      });
+    }};
+  }
 
   function receive(T,shader,values,count){
     Object.assign(shader.uniforms,values);
@@ -340,5 +487,5 @@ const riverShadows=(() => {
     return image.toDataURL('image/png');
   }
 
-  return {uniforms,receive,attach,bakeDepth,bake};
+  return {uniforms,receive,movingUniforms,receiveMoving,createMoving,attach,bakeDepth,bake};
 })();

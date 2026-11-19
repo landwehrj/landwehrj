@@ -8,6 +8,7 @@
   const sound = document.querySelector('#garden-sound');
   const giButton = document.querySelector('#garden-gi');
   const shadowControl = document.querySelector('#garden-shadows');
+  const movingButton = document.querySelector('#garden-moving-shadows');
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -82,7 +83,7 @@
   // Direct links have no entry click to unlock audio. The first walking or
   // viewing gesture can start the river without starting the music.
   function activateOnInteraction(e){
-    if(e.target.closest('#garden-ambience, #garden-gi, #garden-shadows, #leave-garden') || e.key==='Escape')return;
+    if(e.target.closest('#garden-ambience, #garden-gi, #garden-shadows, #garden-moving-shadows, #leave-garden') || e.key==='Escape')return;
     if(!ambience.playing)startAmbience();
   }
   dialog.addEventListener('pointerup',activateOnInteraction);
@@ -144,13 +145,15 @@
     const supportsGI=Boolean(giButton && renderer.capabilities.isWebGL2 && typeof riverGI!=='undefined');
     const giUniforms=supportsGI?riverGI.uniforms(T):null;
     const supportsShadows=Boolean(shadowControl && typeof riverShadows!=='undefined');
-    const shadowLamps=[];
-    let shadowValues=null;
+    const movingValues=movingButton && renderer.capabilities.isWebGL2 && typeof riverShadows!=='undefined'
+      && riverShadows.movingUniforms?riverShadows.movingUniforms(T,color('#ffaf73')):null;
+    const shadowLamps=[],movingLanterns=[];
+    let shadowValues=null,movingEffect=null,movingEnabled=false;
     const bounceBoxes=[];
     const bounceMatrix=new T.Object3D();
     let giEffect=null;
     function bounceBox(material,x,y,z,w,h,d,rotation=0,tilt=0){
-      if(!supportsGI)return;
+      if(!supportsGI && !movingValues)return;
       bounceMatrix.position.set(x,y,z);
       bounceMatrix.scale.set(w,h,d);
       bounceMatrix.rotation.set(0,rotation,tilt,'YXZ');
@@ -576,11 +579,12 @@
         const isCap=material===edge;
         const isPrint=material===photoMat,isMat=material===linen,isDeck=material===timber;
         const profile=isStone?'stone':isPrint?'print':isMat?'mat':isDeck?'deck':'lanterns';
-        material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant();
+        material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant()+(movingEnabled?'-moving':'');
         material.onBeforeCompile=shader=>{
           const variant=shadowVariant(),castShadows=variant!=='off';
           addRiverMist(shader);
           if(giUniforms)riverGI.receive(shader,giUniforms);
+          if(movingEnabled)riverShadows.receiveMoving(shader,movingValues);
           shader.uniforms.riverFixtures={value:lightmap};
           shader.uniforms.riverFixtureColor=warm;
           shader.uniforms.riverFixtureTime=nightTime;
@@ -629,6 +633,24 @@
                 }
               }
             }
+            ${movingEnabled?`
+            vec3 movingReceiver=inverseTransformDirection(geometryNormal,viewMatrix);
+            for(int movingSlot=0;movingSlot<RIVER_MOVING_LIGHTS;movingSlot++){
+              float power=movingLampPower[movingSlot];
+              if(power<=0.)continue;
+              vec3 delta=movingLamp[movingSlot]-riverSurface;
+              float distance=length(delta);
+              vec3 toLamp=delta/max(distance,.001);
+              float cone=smoothstep(.62,.77,dot(-toLamp,movingShadowAxis[movingSlot]));
+              float range=1.-smoothstep(3.0,4.8,distance);
+              if(cone*range>0. && dot(toLamp,movingReceiver)>0.){
+                float visible=movingShadow(riverSurface,movingReceiver,movingSlot);
+                directLight.direction=mat3(viewMatrix)*toLamp;
+                directLight.color=movingLampColor*27.*power*cone*range*visible/(distance*distance+.66);
+                directLight.visible=true;
+                RE_Direct(directLight,geometry,material,reflectedLight);
+              }
+            }`:''}
             // Approximate how the floor, low walls and eaves mask indirect light
             // where they meet. The doorway stays open to the sky.
             for(int gallery=0;gallery<${rooms.length};gallery++){
@@ -1342,7 +1364,19 @@
     lanternSpans.forEach(([[sx,sz],[ex,ez]],i)=>{
       const side=i%2===0?1:-1;
       const x=(sx+ex)/2,z=(sz+ez)/2;
-      lantern(x+side*7.4,1.65+(i%3)*.40,z,.81+(i%4)*.075);
+      const lamp=lantern(x+side*7.4,1.65+(i%3)*.40,z,.81+(i%4)*.075);
+      const galleryCrossings=rooms.length-1;
+      if(movingValues && (i<galleryCrossings || (i-galleryCrossings)%2===0)){
+        const span=bridges.find(b=>b.sx===sx && b.sz===sz);
+        const along=new T.Vector3(span.x-sx,0,span.z-sz).normalize();
+        const outward=new T.Vector3(-along.z,0,along.x).multiplyScalar(side);
+        const distance=span.length<2?span.length+.03:span.length*.48;
+        const center=new T.Vector3(sx,1.38,sz).addScaledVector(along,distance).addScaledVector(outward,2.38);
+        const axis=outward.clone().multiplyScalar(-.82).addScaledVector(along,.10);
+        axis.y=-.55;axis.normalize();
+        lamp.movingPath={center,axis,along,outward,phase:i*.53};
+        movingLanterns.push(lamp);
+      }
       if(i%3===0)lantern(x-side*6.8,3.4,z-2.4,.87);
     });
     // Individual nearby lanterns show the bamboo hoops and translucent paper.
@@ -1378,9 +1412,15 @@
     function updateLanterns(time){
       nightTime.value=reduced.matches?0:time;
       const t=nightTime.value;
-      lanterns.forEach(({x,y,z,size,phase,glow,fixture,mountHeight,cordIndex},i)=>{
+      lanterns.forEach(({x,y,z,size,phase,glow,fixture,mountHeight,cordIndex,movingPath},i)=>{
         const lift=Math.sin(t*.36+phase), drift=Math.sin(t*.21+phase*1.2);
-        if(mountHeight){
+        if(movingEnabled && movingPath){
+          const {center,along,outward,phase:offset}=movingPath;
+          support.position.copy(center)
+            .addScaledVector(outward,.24*Math.sin(t*.54+offset))
+            .addScaledVector(along,-1.18*Math.sin(t*.62+offset));
+          support.position.y+=.13*Math.sin(t*.88+offset)-.31*size;
+        }else if(mountHeight){
           support.position.set(x+.057*drift,y+.024*lift,z+.034*Math.cos(t*.24+phase));
         }else if(fixture){
           support.position.set(x+.12*drift,y+.17*lift,z+.078*Math.cos(t*.24+phase));
@@ -1635,6 +1675,28 @@
       shadowControl.hidden=false;
       shadowControl.addEventListener('change',changeShadows);
     }
+    function toggleMovingShadows(){
+      if(!movingEnabled && !movingEffect){
+        try{
+          const matrices=architectureBoxes().map(box=>box.matrix);
+          movingEffect=riverShadows.createMoving(T,renderer,movingValues,matrices,screenMaterial,drawPass);
+        }catch(error){
+          console.warn('Moving lantern shadows are unavailable:',error);
+          movingButton.disabled=true;
+          return;
+        }
+      }
+      movingEnabled=!movingEnabled;
+      movingButton.setAttribute('aria-pressed',String(movingEnabled));
+      movingButton.textContent=movingEnabled?'Moving shadows on':'Moving shadows off';
+      for(const material of architectureMaterials)material.needsUpdate=true;
+      updateLanterns(nightTime.value);
+      draw();
+    }
+    if(movingLanterns.length){
+      movingButton.hidden=false;
+      movingButton.addEventListener('click',toggleMovingShadows);
+    }
     function toggleGI(){
       const enabled=!giUniforms.riverGIEnabled.value;
       if(enabled && !giEffect){
@@ -1671,6 +1733,15 @@
     }
     function draw(){
       if(giUniforms?.riverGIEnabled.value)giEffect.update(nightTime.value);
+      if(movingEnabled){
+        const nearby=movingLanterns.map(lamp=>{
+          const distance=camera.position.distanceTo(lamp.movingPath.center);
+          const visibility=1-T.MathUtils.smoothstep(distance,15,22);
+          const power=visibility*(.96+.04*Math.sin(nightTime.value*3.2+lamp.movingPath.phase));
+          return {lamp,distance,power};
+        }).filter(light=>light.power>0).sort((a,b)=>a.distance-b.distance).slice(0,movingValues.movingLampPower.value.length);
+        movingEffect.update(nightTime.value,nearby);
+      }
       sky.position.set(camera.position.x,0,camera.position.z);
       camera.updateMatrixWorld();
       camera.getWorldDirection(gaze);gaze.y=-gaze.y;
@@ -1921,6 +1992,7 @@
     stopFrames();walkPanel.inert=false;fallback.hidden=false;movement.hidden=true;view.hidden=true;
     if(giButton)giButton.hidden=true;
     if(shadowControl)shadowControl.hidden=true;
+    if(movingButton)movingButton.hidden=true;
     select(current);
   }
   function prepare(){

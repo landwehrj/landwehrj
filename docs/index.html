@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#f7f4eb">
 <title>The Lead Programmer’s Chair</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=shadows">
+<link rel="stylesheet" href="style.css?v=moving-shadows">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
 <script defer src="memorial.js"></script>
@@ -16,8 +16,8 @@
 <script defer src="river-sounds.js?v=soaked"></script>
 <script defer src="river-audio.js?v=soaked"></script>
 <script defer src="river-gi.js?v=bridge-joins"></script>
-<script defer src="river-shadows.js?v=cached-moon"></script>
-<script defer src="garden.js?v=default-shadows"></script>
+<script defer src="river-shadows.js?v=bridge-lanterns"></script>
+<script defer src="garden.js?v=bridge-lanterns"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -65,6 +65,7 @@
         <option value="2">Cached shadows</option>
         <option value="3" selected>Lanterns + moon</option>
       </select>
+      <button id="garden-moving-shadows" class="garden-pill" aria-label="Ray-traced moving lantern shadows" aria-pressed="false" hidden>Moving shadows off</button>
     </div>
   </div>
   <div class="garden-bottom">
