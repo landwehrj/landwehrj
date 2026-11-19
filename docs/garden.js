@@ -468,8 +468,11 @@
     const edge = new T.MeshStandardMaterial({map:limestone,color:color('#84919c'),roughness:.66});
     const bronze = new T.MeshStandardMaterial({color:color('#bc9b71'),roughness:.43,metalness:.28});
     const linen = new T.MeshStandardMaterial({color:color('#c4b7a5'),roughness:1});
+    const frameOak=new T.MeshStandardMaterial({color:color('#62564c'),roughness:.73});
     const pictureMetal=new T.MeshStandardMaterial({color:color('#62503d'),roughness:.49,metalness:.38});
-    const pictureBulb=new T.MeshBasicMaterial({color:color('#ffd490')});
+    const pictureBrass=new T.MeshStandardMaterial({color:color('#a68a58'),roughness:.42,metalness:.67});
+    const pictureBulb=new T.MeshBasicMaterial({color:color('#fff0c7'),toneMapped:false});
+    const frameScrew=new T.MeshStandardMaterial({color:color('#494745'),roughness:.57,metalness:.55});
     const blockers=[];
     function blockWalking(x,z,width,depth){
       blockers.push({x,z,halfWidth:width/2,halfDepth:depth/2});
@@ -491,32 +494,50 @@
     photoUniforms.photograph.value=atlasMap;
     atlasMap.encoding=T.sRGBEncoding;atlasMap.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
     const photoMat=new T.MeshStandardMaterial({
-      map:atlasMap,emissiveMap:atlasMap,emissive:color('#efe2cf'),emissiveIntensity:.12,
+      map:atlasMap,emissiveMap:atlasMap,emissive:color('#efe2cf'),emissiveIntensity:.074,
       color:color('#f1e6d6'),roughness:.96
     });
     const pictureGlass=new T.ShaderMaterial({
       transparent:true,depthWrite:false,
-      uniforms:{nearbyLantern:{value:new T.Vector3()}},
+      uniforms:{galleryReflections:{value:Array.from({length:4},()=>new T.Vector4())}},
       vertexShader:`varying vec3 glassPosition,glassNormal;
+        varying vec2 glassUV;
         void main(){
           glassPosition=(modelMatrix*vec4(position,1.)).xyz;
           glassNormal=mat3(modelMatrix)*normal;
+          glassUV=uv;
           gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);
         }`,
-      fragmentShader:`uniform vec3 nearbyLantern;
+      fragmentShader:`uniform vec4 galleryReflections[4];
         varying vec3 glassPosition,glassNormal;
+        varying vec2 glassUV;
+        float grain(vec2 p){return fract(52.9829189*fract(dot(p,vec2(.06711056,.00583715))));}
         void main(){
           vec3 view=normalize(cameraPosition-glassPosition);
           vec3 normal=normalize(glassNormal);
           vec3 reflectedRay=reflect(-view,normal);
-          float fresnel=.009+.13*pow(1.-max(dot(view,normal),0.),5.);
-          float glint=pow(max(dot(reflectedRay,normalize(nearbyLantern-glassPosition)),0.),54.);
-          vec3 sky=mix(vec3(.035,.064,.107),vec3(.12,.20,.30),smoothstep(-.22,.40,reflectedRay.y));
-          gl_FragColor=vec4(mix(sky,vec3(.88,.38,.11),glint),fresnel+.048*glint);
+          float grazing=pow(1.-max(dot(view,normal),0.),5.);
+          float glint=0.;
+          for(int i=0;i<4;i++){
+            vec4 lamp=galleryReflections[i];
+            vec3 delta=lamp.xyz-glassPosition;
+            float dist=max(.35,length(delta));
+            float cone=1.-dot(reflectedRay,delta/dist);
+            float size=max(.015,lamp.w*.47/dist);
+            glint+=exp(-1.20*cone/(size*size))*step(.01,lamp.w)*(1.-smoothstep(5.,14.,dist));
+          }
+          vec2 reflectedSky=vec2(atan(reflectedRay.z,reflectedRay.x),reflectedRay.y)*vec2(52.,66.);
+          float star=step(.988,grain(floor(reflectedSky)))*exp(-22.*dot(fract(reflectedSky)-.5,fract(reflectedSky)-.5));
+          float skyHeight=smoothstep(-.15,.44,reflectedRay.y);
+          float dust=step(.989,grain(floor(glassUV*385.)))*(.16+.70*grazing);
+          float sheen=.007+.105*grazing+.011*dust;
+          vec3 sky=mix(vec3(.028,.053,.082),vec3(.17,.25,.36),skyHeight)+star*.25*skyHeight;
+          float warm=min(1.,glint)*(.078+.075*grazing);
+          gl_FragColor=vec4(mix(sky,vec3(1.,.55,.21),warm/max(.001,sheen+warm)),sheen+warm);
           #include <encodings_fragment>
         }`
     });
-    const portraits=[];
+    const portraits=[],glazedFrames=[];
     // The shade is a closed paper envelope at the top and open at its bamboo hoop.
     const lanterns=[], fixtures=[];
     const paperMap=painted(256,(ctx,n)=>{
@@ -615,7 +636,7 @@
     function shadowVariant(mode=shadowValues?.riverShadowMode.value ?? 0){
       return mode===0?'off':'map';
     }
-    function finishRailing(shader,finish){
+    function finishJoinery(shader,finish){
       const axes=finish.horizontal?'xzy':'xyz';
       const varyings='varying vec4 railPosition;\nvarying vec3 railNormal;\n';
       shader.uniforms.railFinishMap={value:finish.map};
@@ -698,12 +719,13 @@
         const isStone=material.map===limestone;
         const isCap=material===edge;
         const isPrint=material===photoMat,isMat=material===linen,isDeck=material===timber;
-        const railFinish=railingFinishes.get(material);
+        const isFrame=material===frameOak;
+        const grainFinish=joineryFinishes.get(material);
         const isDeckTrim=material===headerPlank || material===walkwayTrim;
-        const exterior=isStone || isDeck || railFinish || isDeckTrim;
-        const profile=isStone?'stone':isPrint?'print':isMat?'mat':isDeck?'deck':isDeckTrim?'deck-trim':'lanterns';
+        const exterior=isStone || isDeck || isDeckTrim || (grainFinish && material!==uprightCedar);
+        const profile=isStone?'stone':isPrint?'print':isMat?'mat':isFrame?'frame':isDeck?'deck':isDeckTrim?'deck-trim':'lanterns';
         material.customProgramCacheKey=()=>'river-'+profile+'-'+shadowVariant()+(movingEnabled?'-moving':'')
-          +(railFinish?'-railing-'+material.id:exterior?'-exterior':'');
+          +(grainFinish?'-joinery-'+material.id:exterior?'-exterior':'');
         material.onBeforeCompile=shader=>{
           const variant=shadowVariant(),castShadows=variant!=='off';
           addRiverMist(shader);
@@ -817,23 +839,53 @@
             roughnessFactor=mix(roughnessFactor,${isStone?'.39':'.31'},wetness*.74);
           `);
           if(castShadows)riverShadows.receive(T,shader,shadowValues,rooms.length);
-          if(isPrint || isMat){
+          if(isPrint || isMat || isFrame){
             // Light from the bar above each frame falls across the print and mat.
             const pictureVarying='varying vec3 pictureFace;\n';
-            shader.vertexShader=pictureVarying+(isPrint?'attribute vec2 pictureUV;\n':'')
+            shader.vertexShader=pictureVarying+'attribute vec2 pictureUV;\n'
+              +(isFrame?'varying vec2 frameUV;\n':'')
               +shader.vertexShader.replace('#include <begin_vertex>',`
               #include <begin_vertex>
-              pictureFace=vec3(${isPrint?'pictureUV,1.':'position.xy+.5,max(normal.z,0.)'});
+              pictureFace=vec3(pictureUV,max(0.,normal.z));
+              ${isFrame?'frameUV=uv;':''}
             `);
             shader.fragmentShader=pictureVarying+shader.fragmentShader.replace('#include <lights_fragment_maps>',`
               #include <lights_fragment_maps>
-              float down=clamp(1.-pictureFace.y,0.,1.);
-              float spread=mix(.35,.71,sqrt(down));
-              float beam=1.-smoothstep(spread*.36,spread,abs(pictureFace.x-.5));
-              float wash=beam/(1.+1.1*down);
-              vec3 pictureLight=vec3(1.,.78,.59)*pictureFace.z*(.86+1.75*wash);
+              float down=max(.035,1.14-pictureFace.y);
+              float spread=mix(.28,.83,sqrt(min(1.,down)));
+              float beam=1.-smoothstep(spread*.43,spread,abs(pictureFace.x-.5));
+              float wash=beam/(1.+2.5*down+1.3*down*down);
+              vec3 pictureLight=vec3(1.,.84,.66)*pictureFace.z*(${isFrame?'.06+2.7*wash':'.39+2.8*wash'});
               reflectedLight.directDiffuse+=BRDF_Diffuse_Lambert(material.diffuseColor)*pictureLight;
             `);
+          }
+          if(isMat || isPrint)shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
+            #include <color_fragment>
+            vec2 paperCell=floor(pictureFace.xy*vec2(750.,560.));
+            float paperNoise=fract(52.9829189*fract(dot(paperCell,vec2(.06711056,.00583715))));
+            float detail=1.-smoothstep(.55,2.2,max(fwidth(pictureFace.x)*750.,fwidth(pictureFace.y)*560.));
+            float lip=min(abs(.5-abs(pictureFace.x-.5)),abs(.5-abs(pictureFace.y-.5)));
+            float rebate=smoothstep(0.,.027,lip);
+            diffuseColor.rgb*=mix(${isMat?'.82':'.87'},1.,rebate)*(1.+${isMat?'.20':'.026'}*(paperNoise-.5)*detail);
+          `);
+          if(isFrame){
+            shader.uniforms.oakGrain={value:railGrain};
+            shader.fragmentShader='varying vec2 frameUV;uniform sampler2D oakGrain;\n'+shader.fragmentShader
+              .replace('#include <color_fragment>',`
+                #include <color_fragment>
+                vec3 fibre=texture2D(oakGrain,frameUV).rgb;
+                float stains=texture2D(oakGrain,frameUV*vec2(.44,.57)+.31).b;
+                diffuseColor.rgb*=mix(.52,1.34,smoothstep(.21,.80,fibre.b))*mix(.69,1.22,stains);
+              `).replace('#include <roughnessmap_fragment>',`
+                #include <roughnessmap_fragment>
+                roughnessFactor=clamp(roughnessFactor+.39*(fibre.g-.46),.50,.91);
+              `).replace('#include <normal_fragment_maps>',`
+                #include <normal_fragment_maps>
+                vec3 dx=dFdx(-vViewPosition),dy=dFdy(-vViewPosition);
+                vec3 tx=cross(dy,normal),ty=cross(normal,dx);
+                float det=dot(dx,tx),relief=.0014*fibre.r+.0007*stains;
+                normal=normalize(max(abs(det),1e-7)*normal-sign(det)*(tx*dFdx(relief)+ty*dFdy(relief)));
+              `);
           }
           if(isDeck){
             shader.uniforms.boardGrainMap={value:railGrain};
@@ -945,7 +997,7 @@
               normal=normalize(max(abs(stoneDet),1e-7)*normal-microRelief);
             `);
           }
-          if(railFinish)finishRailing(shader,railFinish);
+          if(grainFinish)finishJoinery(shader,grainFinish);
           if(exterior){
             shader.fragmentShader=shader.fragmentShader.replace('#include <lights_fragment_maps>',`
               #include <lights_fragment_maps>
@@ -1235,9 +1287,7 @@
     const cedar=new T.MeshStandardMaterial({
       map:cedarMap,bumpMap:cedarMap,bumpScale:.011,roughnessMap:cedarFinish,roughness:.83,color:color('#b58d72')
     });
-    const uprightCedar=cedar.clone();
-    uprightCedar.bumpScale=.014;
-    uprightCedar.roughness=.73;
+    const uprightCedar=new T.MeshStandardMaterial({color:color('#795f52'),roughness:.72});
     const railWood=new T.MeshStandardMaterial({color:color('#805743'),roughness:.54});
     const plinth=new T.MeshStandardMaterial({color:color('#35434f'),roughness:.69,vertexColors:true});
     const railCap=new T.MeshStandardMaterial({color:color('#a88b63'),roughness:.40,metalness:1});
@@ -1288,7 +1338,9 @@
     walkwayTrim.color.copy(color('#afaaa1'));
     const headerPlank=timber.clone();
     headerPlank.color.copy(color('#b3aea5'));
-    const railingFinishes=new Map([
+    const joineryFinishes=new Map([
+      [uprightCedar,{map:railGrain,scale:'vec3(1.85,.59,1.85)',wear:'.09',relief:'.00082'}],
+      [pictureBrass,{map:castFinish,scale:'vec3(5.3)',wear:'.24',relief:'.00058',patina:true}],
       [railWood,{map:railGrain,horizontal:true,scale:'vec3(3.7,.65,3.7)',wear:'.18',relief:'.00094'}],
       [plinth,{map:railGrain,scale:'vec3(4.2,1.05,4.2)',wear:'.25',relief:'.00120',groundContact:true}],
       [railCap,{map:castFinish,scale:'vec3(4.6)',wear:'.32',relief:'.00062',patina:true}],
@@ -1487,6 +1539,44 @@
         uv.setXY(j,(ax+.5+uv.getX(j)*(aw-1))/2048,1-(ay+.5+(1-uv.getY(j))*(ah-1))/2048);
       return geo;
     }
+    function frameBorder(w,h,profile,miter=0){
+      const positions=[],grain=[],picture=[];
+      const corners=[[-1,-1],[1,-1],[1,1],[-1,1]];
+      for(let side=0;side<4;side++){
+        const [sx,sy]=corners[side],[ex,ey]=corners[(side+1)%4];
+        const horizontal=sy===ey;
+        const rings=profile.map(([margin,depth])=>{
+          const x=w/2+margin,y=h/2+margin;
+          const a=[sx*x+(ex-sx)*miter/2,sy*y+(ey-sy)*miter/2,depth];
+          const b=[ex*x-(ex-sx)*miter/2,ey*y-(ey-sy)*miter/2,depth];
+          return [a,b,margin];
+        });
+        for(let i=0;i<rings.length;i++){
+          const [a,b,outer]=rings[i],[c,d,inner]=rings[(i+1)%rings.length];
+          for(const [point,margin] of [[a,outer],[b,outer],[d,inner],[a,outer],[d,inner],[c,inner]]){
+            positions.push(...point);
+            grain.push((margin+point[2]*.24)*6.9+side*.29,(horizontal?point[0]:point[1])*.77+side*.37);
+            picture.push(point[0]/w+.5,point[1]/h+.5);
+          }
+        }
+      }
+      const geometry=new T.BufferGeometry();
+      geometry.setAttribute('position',new T.Float32BufferAttribute(positions,3));
+      geometry.setAttribute('uv',new T.Float32BufferAttribute(grain,2));
+      geometry.setAttribute('pictureUV',new T.Float32BufferAttribute(picture,2));
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+    const oakProfile=[
+      [.207,-.066],[.210,-.056],[.210,.077],[.202,.097],[.190,.102],
+      [.118,.102],[.109,.090],[.105,.074],[.105,.032],[.129,-.066]
+    ];
+    const paperProfile=[[.130,.018],[.130,.061],[.008,.061],[-.002,.041],[-.002,.026]];
+    const pictureTube=new T.CylinderGeometry(.5,.5,1,24);
+    const pictureArm=new T.TubeGeometry(new T.CatmullRomCurve3([
+      new T.Vector3(0,-.031,-.091),new T.Vector3(0,.054,-.019),
+      new T.Vector3(0,.103,.101),new T.Vector3(0,.056,.188),new T.Vector3(0,.010,.205)
+    ]),18,.013,8,false);
     function roomSign(room,x,y,headerFace){
       const c=document.createElement('canvas');c.width=768;c.height=120;
       const ctx=c.getContext('2d');ctx.fillStyle='#182c37';ctx.fillRect(0,0,768,120);
@@ -1570,10 +1660,16 @@
         const ph=Math.min(1.72,2.48*ah/aw),pw=ph*aw/ah,mid=1.86;
         const backingX=px+.14*side;
         batch(beam,darkTimber,backingX,mid,pz,pw+.42,ph+.42,.16,angle);
-        batch(trim,cedar,px+.078*side,mid,pz,pw+.31,ph+.31,.15,angle);
-        batch(trim,bronze,px+.039*side,mid,pz,pw+.19,ph+.19,.097,angle);
-        batch(trim,linen,px,mid,pz,pw+.14,ph+.14,.06,angle);
-        blockWalking(px+.085*side,pz,.27,pw+.42);
+        for(const [profile,material,miter] of [[oakProfile,frameOak,.0018],[paperProfile,linen,0]]){
+          const border=new T.Mesh(frameBorder(pw,ph,profile,miter),material);
+          border.position.set(px,mid,pz);border.rotation.y=angle;
+          scene.add(reflected(border));
+        }
+        for(const sign of [-1,1]){
+          bounceBox(frameOak,px-.018*side,mid+sign*(ph/2+.157),pz,pw+.42,.105,.168,angle);
+          bounceBox(frameOak,px-.018*side,mid,pz+sign*(pw/2+.157),.105,ph+.21,.168,angle);
+        }
+        blockWalking(px+.058*side,pz,.322,pw+.42);
         const wallX=x+side*wallReach,base=wallCapTop,frameBottom=mid-(ph+.42)/2;
         const hangerTop=frameBottom+.27;
         // Seat the arms in the rear timber and the uprights behind it.
@@ -1583,26 +1679,30 @@
           batch(trim,pictureMetal,wallX,base+.018,pz+dz,.20,.039,.15);
           batch(trim,pictureMetal,wallX,(base+hangerTop)/2,pz+dz,.079,hangerTop-base,.088);
           batch(trim,pictureMetal,(armSeat+armEnd)/2,hangerTop,pz+dz,Math.abs(armEnd-armSeat),.070,.108);
+          batch(trim,frameScrew,px-.104*side,frameBottom+.035,pz+dz,.023,.114,.072);
+          batch(pictureTube,frameScrew,px-.12*side,frameBottom+.068,pz+dz,.015,.009,.015,0,Math.PI/2);
         }
-        const pictureX=px-.198*side,pictureY=mid+ph/2+.18;
-        const lightWidth=Math.min(.77,pw*.51);
-        batch(trim,pictureMetal,pictureX,pictureY,pz,.103,.069,lightWidth);
-        batch(trim,pictureBulb,pictureX,pictureY-.034,pz,.045,.012,lightWidth-.065);
-        for(const dz of [-lightWidth*.31,lightWidth*.31]){
-          batch(trim,pictureMetal,px+.079*side,pictureY-.046,pz+dz,.078,.129,.072);
-          batch(trim,pictureMetal,px-.057*side,pictureY,pz+dz,.287,.029,.035);
+        for(const dx of [-1,1])for(const dy of [-1,1]){
+          batch(pictureTube,frameScrew,px-.106*side,mid+dy*(ph/2+.157),pz+dx*(pw/2+.171),
+            .015,.008,.015,0,Math.PI/2);
         }
+        const pictureX=px-.207*side,pictureY=mid+ph/2+.272;
+        const lightWidth=Math.min(.92,pw*.59);
+        batch(pictureTube,pictureBrass,pictureX,pictureY,pz,.090,lightWidth,.090,Math.PI/2,Math.PI/2);
+        for(const dz of [-lightWidth/2,lightWidth/2]){
+          batch(pictureTube,pictureBrass,pictureX,pictureY,pz+dz,.103,.021,.103,Math.PI/2,Math.PI/2);
+        }
+        batch(trim,pictureBulb,pictureX+side*.005,pictureY-.046,pz,.046,.012,lightWidth-.045);
+        batch(pictureArm,pictureBrass,px,pictureY,pz,1,1,1,angle);
+        batch(trim,frameScrew,px+.083*side,pictureY-.018,pz,.038,.130,.082);
         const pic=new T.Mesh(photoGeometry(id,pw,ph),photoMat);
-        pic.position.set(px-.043*side,mid,pz);pic.rotation.y=angle;pic.userData.index=stations.length;
-        scene.add(pic);portraits.push(pic);stations.push({x:px-side*3.55,z:pz,angle,room});
+        pic.position.set(px-.037*side,mid,pz);pic.rotation.y=angle;pic.userData.index=stations.length;
+        scene.add(reflected(pic));portraits.push(pic);stations.push({x:px-side*3.55,z:pz,angle,room});
         const lampX=px-side*.54,lampZ=pz+pw/2+.38;
-        const glass=new T.Mesh(new T.PlaneGeometry(pw+.095,ph+.095),pictureGlass);
-        glass.position.set(px-.050*side,mid,pz);
+        const glass=new T.Mesh(new T.PlaneGeometry(pw+.216,ph+.216),pictureGlass);
+        glass.position.set(px-.073*side,mid,pz);
         glass.rotation.y=angle;
-        glass.onBeforeRender=()=>{
-          pictureGlass.uniforms.nearbyLantern.value.set(lampX,2.62,lampZ);
-          pictureGlass.uniformsNeedUpdate=true;
-        };
+        glazedFrames.push({glass,side});
         scene.add(glass);
         batch(beam,darkTimber,(wallX+lampX)*.5,h-.045,lampZ,.94,.098,.106);
         const lamp=lantern(lampX,2.45,lampZ,.54,true,h+.37,h-.094);
@@ -1942,7 +2042,23 @@
       const angle=fullTurn*(i+rand()*.7)/44,dist=14+rand()*15;
       lantern(Math.sin(angle)*dist,4+rand()*7,-Math.cos(angle)*dist,.55+rand()*1.12);
     }
-    const architectureMaterials=[stone,edge,bronze,plinth,linen,photoMat,pictureMetal,timber,blueTiles,
+    for(const {glass,side} of glazedFrames){
+      const at=glass.position;
+      const nearby=lanterns.filter(lamp=>(at.x-lamp.x)*side>.40)
+        .map(lamp=>({lamp,distance:Math.hypot(at.x-lamp.x,at.y-lamp.y,at.z-lamp.z)}))
+        .filter(({distance})=>distance<14).sort((a,b)=>a.distance-b.distance).slice(0,4);
+      glass.onBeforeRender=()=>{
+        pictureGlass.uniforms.galleryReflections.value.forEach((slot,i)=>{
+          const lamp=nearby[i]?.lamp;
+          if(lamp){
+            const {x,y,z}=lamp.glow.position;
+            slot.set(x,y,z,lamp.size);
+          }else slot.set(0,0,0,0);
+        });
+        pictureGlass.uniformsNeedUpdate=true;
+      };
+    }
+    const architectureMaterials=[stone,edge,bronze,plinth,linen,frameOak,photoMat,pictureMetal,pictureBrass,frameScrew,timber,blueTiles,
       cedar,uprightCedar,walkwayTrim,headerPlank,railWood,lowerRail,railFoot,railCap,plaster,darkTimber,mortar];
     if(supportsShadows)shadowValues=riverShadows.uniforms(T,rooms,shadowLamps,moonDirection.value);
     lightArchitecture(architectureMaterials);
@@ -2206,8 +2322,8 @@
       try{
         if(mode>0){
           const [mask,depth]=await Promise.all([
-            loadShadowTexture('river-shadow-mask.png?v=recessed-photo-mounts'),
-            mode>1?loadShadowTexture('river-shadow-depth.png?v=recessed-photo-mounts',true):null
+            loadShadowTexture('river-shadow-mask.png?v=gallery-frames'),
+            mode>1?loadShadowTexture('river-shadow-depth.png?v=gallery-frames',true):null
           ]);
           if(selection!==shadowSelection)return;
           shadowValues.riverShadowMask.value=mask;
