@@ -164,7 +164,8 @@
     renderer.toneMapping=T.ACESFilmicToneMapping;
     renderer.toneMappingExposure=.96;
     const scene = new T.Scene();
-    const camera = new T.PerspectiveCamera(56,1,.07,160);
+    // Keep the finale in range from the entrance after a visitor walks back upstream.
+    const camera = new T.PerspectiveCamera(56,1,.07,280);
     camera.rotation.order = 'YXZ';
     const color = value => new T.Color(value).convertSRGBToLinear();
     const waterLevel=-.43;
