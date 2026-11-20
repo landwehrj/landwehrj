@@ -1,9 +1,9 @@
 const memorialPhotoDescriptions = [
     'Curled up on a plaid blanket', 'Sleeping on a patterned pillow', 'Curled up on the white bedding',
-    'As a kitten, reaching up with a white paw', 'Washing a paw as a kitten', 'Stretched out beside the monitor',
-    'Keeping watch by the glowing monitor', 'Nestled on a dark cushion at the desk', 'Resting behind my head on the chair',
+    'As a kitten, cleaning her paw', 'Cleaning herself as a kitten', 'Stretched out beside the monitor',
+    'Keeping watch by the glowing monitor', 'Nestled on a towel at the desk', 'Resting behind my head on the chair',
     'Standing behind my shoulders', 'Balancing across my shoulders', 'At the keyboard in front of the monitor',
-    'Watching from her bed beside the desk', 'Curled into a fleece-lined bed', 'Curled up on the computer chair',
+    'Asleep in her bed beside the desk', 'Curled up on her cat tower', 'Curled up on the computer chair',
     'Looking up from the chair cushion', 'Asleep across the chair, one paw hanging down'
   ];
 (() => {
