@@ -7,6 +7,10 @@
   const fpsLabel=dialog.querySelector('#garden-fps');
   const movement = dialog.querySelector('.garden-movement');
   const walkPanel = dialog.querySelector('.garden-bottom');
+  const thumbstick = dialog.querySelector('.garden-thumbstick');
+  const wideButton = dialog.querySelector('#garden-wide');
+  const portraitScreen = matchMedia('(orientation: portrait)');
+  const touchInput = matchMedia('(pointer: coarse)');
   const music = document.querySelector('#garden-music');
   const sound = document.querySelector('#garden-sound');
   const settings = dialog.querySelector('.garden-settings');
@@ -14,11 +18,15 @@
   const settingsPanel = settings.querySelector('#garden-settings-panel');
   const giButton = document.querySelector('#garden-gi');
   const shadowControl = document.querySelector('#garden-shadows');
+  const wideShadows = document.querySelector('#garden-wide-shadows');
+  const wideShadowSummary = wideShadows.querySelector('summary');
+  const wideShadowChoices = wideShadows.querySelector('.garden-shadow-choices');
   const movingButton = document.querySelector('#garden-moving-shadows');
   const distanceControl = document.querySelector('#garden-distance');
   const distanceSetting = distanceControl.closest('.garden-view-distance');
   const distanceValue = distanceSetting.querySelector('output');
   const defaultViewDistance = distanceControl.valueAsNumber;
+  const shortViewDistance = 160;
   const retestViewDistance = new URLSearchParams(location.search).get('retest')==='view-distance';
   const graphicsKey='lantern-river.graphics.v1';
   const viewer = document.querySelector('#viewer');
@@ -37,11 +45,62 @@
   let desiredMusic = true, audioAttempt = 0, entrance;
   const held = new Map();
   let fastWalk=false;
+  let stickPointer=null,stickRight=0,stickForward=0,wide=false;
 
   function isHeld(action){
     for(const pressed of held.values())if(pressed===action)return true;
     return false;
   }
+
+  function localPoint(element,x,y){
+    const bounds=element.getBoundingClientRect();
+    return dialog.classList.contains('garden-sideways')
+      ? {x:y-bounds.top,y:bounds.right-x}
+      : {x:x-bounds.left,y:y-bounds.top};
+  }
+  function resetStick(){
+    const id=stickPointer;
+    stickPointer=null;stickRight=stickForward=0;
+    if(id!==null && thumbstick.hasPointerCapture(id))thumbstick.releasePointerCapture(id);
+    thumbstick.removeAttribute('data-active');
+    thumbstick.style.removeProperty('--stick-x');
+    thumbstick.style.removeProperty('--stick-y');
+  }
+  function steerStick(e){
+    const point=localPoint(thumbstick,e.clientX,e.clientY);
+    const radius=thumbstick.clientWidth*.31;
+    const dx=point.x-thumbstick.clientWidth/2,dy=point.y-thumbstick.clientHeight/2;
+    const length=Math.hypot(dx,dy),scale=length?Math.min(length,radius)/length:0;
+    const strength=Math.max(0,(Math.min(length/radius,1)-.10)/.90);
+    stickRight=length?dx/length*strength:0;
+    stickForward=length?-dy/length*strength:0;
+    thumbstick.style.setProperty('--stick-x',dx*scale+'px');
+    thumbstick.style.setProperty('--stick-y',dy*scale+'px');
+  }
+  thumbstick.addEventListener('pointerdown',e=>{
+    if(walkPanel.inert || stickPointer!==null || e.button!==0)return;
+    stickPointer=e.pointerId;
+    thumbstick.setPointerCapture(e.pointerId);
+    thumbstick.setAttribute('data-active','');
+    steerStick(e);
+  });
+  thumbstick.addEventListener('pointermove',e=>{if(e.pointerId===stickPointer)steerStick(e)});
+  for(const event of ['pointerup','pointercancel','lostpointercapture']){
+    thumbstick.addEventListener(event,e=>{if(e.pointerId===stickPointer)resetStick()});
+  }
+  function updateWideView(){
+    resetStick();
+    garden?.cancelLook();
+    wideShadows.open=false;
+    dialog.classList.toggle('garden-sideways',wide && portraitScreen.matches);
+    wideButton.setAttribute('aria-pressed',String(wide));
+    resetFPS();
+  }
+  wideButton.addEventListener('click',()=>{
+    wide=!wide;
+    updateWideView();
+  });
+  portraitScreen.addEventListener('change',updateWideView);
 
   function savedGraphics(){
     try{
@@ -57,7 +116,8 @@
   function setSettingsOpen(open){
     settingsPanel.hidden=!open;
     settingsToggle.setAttribute('aria-expanded',String(open));
-    if(open){held.clear();fastWalk=false}
+    if(open){held.clear();fastWalk=false;resetStick()}
+    else wideShadows.open=false;
   }
   settingsToggle.addEventListener('click',()=>setSettingsOpen(settingsPanel.hidden));
   dialog.addEventListener('pointerdown',e=>{
@@ -277,8 +337,8 @@
         cloudBand=smoothstep(.46,.79,cloud)*smoothstep(.03,.21,h)*(1.-smoothstep(.47,.80,h));
         return color+cloudBand*vec3(.012,.019,.031)*opening;
       }`;
-    const sky=new T.Mesh(new T.SphereGeometry(135,64,24),new T.ShaderMaterial({
-      side:T.BackSide,depthWrite:false,toneMapped:false,
+    const sky=new T.Mesh(new T.SphereGeometry(Number(distanceControl.min)*.85,64,24),new T.ShaderMaterial({
+      side:T.BackSide,depthTest:false,depthWrite:false,toneMapped:false,
       extensions:{derivatives:true},
       uniforms:{...horizonColors,moonDirection},
       vertexShader:`varying vec3 place;
@@ -319,6 +379,7 @@
         #include <encodings_fragment>
         }`
     }));
+    sky.renderOrder=-10;
     scene.add(reflected(sky));
 
     const {center:riverCenter,bankX}=riverShore;
@@ -3119,9 +3180,18 @@
       return shadowTextures.get(file);
     }
     let shadowSelection=0;
+    function syncShadowPicker(){
+      const selected=shadowControl.selectedOptions[0];
+      wideShadowSummary.textContent=selected.textContent;
+      wideShadowSummary.setAttribute('aria-label','Cast shadows, '+selected.textContent);
+      for(const choice of wideShadowChoices.children){
+        choice.setAttribute('aria-pressed',String(choice.value===selected.value));
+      }
+    }
     async function changeShadows(redraw=true){
       const selection=++shadowSelection,mode=Number(shadowControl.value);
       shadowControl.setAttribute('aria-busy',String(mode>0));
+      syncShadowPicker();
       try{
         if(mode>0){
           const [mask,depth]=await Promise.all([
@@ -3143,16 +3213,32 @@
       }finally{
         if(selection===shadowSelection){
           shadowControl.removeAttribute('aria-busy');
+          syncShadowPicker();
           if(redraw && dialog.open && !view.hidden)draw();
         }
       }
     }
     if(shadowValues){
       shadowControl.hidden=false;
-      shadowControl.addEventListener('change',async ()=>{
+      wideShadows.hidden=false;
+      const pickShadows=async ()=>{
         await changeShadows();
         saveGraphics(graphicsSettings());
-      });
+      };
+      shadowControl.addEventListener('change',pickShadows);
+      for(const option of shadowControl.options){
+        const choice=document.createElement('button');
+        choice.type='button';choice.className='garden-pill';
+        choice.value=option.value;choice.textContent=option.textContent;
+        choice.addEventListener('click',()=>{
+          shadowControl.value=choice.value;
+          wideShadows.open=false;
+          wideShadowSummary.focus({preventScroll:true});
+          pickShadows();
+        });
+        wideShadowChoices.append(choice);
+      }
+      syncShadowPicker();
     }
     function setMovingActive(active){
       if(active===movingActive)return;
@@ -3359,8 +3445,7 @@
       let fullRange=await measureGraphics(signal);
       if(smooth(fullRange))return fullRange;
 
-      const minimum=Number(distanceControl.min);
-      setViewDistance(minimum);
+      setViewDistance(shortViewDistance);
       const shortRange=await measureGraphics(signal,750,0);
       signal.throwIfAborted();
       setViewDistance(defaultViewDistance);
@@ -3369,7 +3454,7 @@
         // Recheck at full range after the renderer and GPU have warmed up.
         fullRange=await measureGraphics(signal,750,0);
         if(!smooth(fullRange) && improves(fullRange)){
-          setViewDistance(minimum);
+          setViewDistance(shortViewDistance);
           return shortRange;
         }
       }
@@ -3468,8 +3553,7 @@
       arrival={position:camera.position.clone(),pitch,yaw};
       stopGuide();
       held.clear();fastWalk=false;
-      if(drag && canvas.hasPointerCapture(drag.id))canvas.releasePointerCapture(drag.id);
-      drag=null;
+      resetStick();cancelLook();
       walkPanel.inert=true;
       view.focus({preventScroll:true});
       showFinale(0);
@@ -3680,10 +3764,10 @@
       const p=camera.position;
       if(!arrival){
         const walkDt=Math.min(.18,dt);
-        if(held.size && guidePoints.length)stopGuide();
+        if((held.size || stickPointer!==null) && guidePoints.length)stopGuide();
         if(guideRunning)advanceGuide(walkDt);
-        else move(Number(isHeld('strafeRight'))-Number(isHeld('strafeLeft')),
-                  Number(isHeld('forward'))-Number(isHeld('back')),
+        else move(stickRight+Number(isHeld('strafeRight'))-Number(isHeld('strafeLeft')),
+                  stickForward+Number(isHeld('forward'))-Number(isHeld('back')),
                   Number(isHeld('left'))-Number(isHeld('right')),walkDt);
         if(elapsed<0 && p.z<=overlookEntranceZ && Math.abs(p.x-ex)<landingWidth/2)beginFarewell();
       }
@@ -3695,10 +3779,11 @@
       if(!guideLookTime)updateLocation(p);
       camera.rotation.set(pitch,yaw,0,'YXZ');updateLanterns(time);updateRowboat(nightTime.value);draw();
     }
-    function photoAt(x,y){
-      const r=canvas.getBoundingClientRect();
-      caster.setFromCamera({x:2*(x-r.left)/r.width-1,y:1-2*(y-r.top)/r.height},camera);
-      if(x<r.left || x>=r.right || y<r.top || y>=r.bottom)return null;
+    function photoAt(clientX,clientY){
+      const {x,y}=localPoint(canvas,clientX,clientY);
+      const width=canvas.clientWidth,height=canvas.clientHeight;
+      caster.setFromCamera({x:2*x/width-1,y:1-2*y/height},camera);
+      if(x<0 || x>=width || y<0 || y>=height)return null;
       photoHits.length=0;
       const hit=caster.intersectObjects(portraits,false,photoHits).find(hit=>hit.object.visible && hit.distance<9);
       return hit ? hit.object.userData.index : null;
@@ -3707,12 +3792,19 @@
       const clickable=hover && !drag && !arrival && !viewer.open && photoAt(hover.x,hover.y)!==null;
       canvas.classList.toggle('photo-hover',Boolean(clickable));
     }
+    function cancelLook(){
+      const id=drag?.id;
+      drag=null;hover=null;
+      if(id!==undefined && canvas.hasPointerCapture(id))canvas.releasePointerCapture(id);
+      updatePhotoCursor();
+    }
     guide.addEventListener('click',follow);
     canvas.addEventListener('pointerdown',e=>{
       if(arrival || drag || e.button!==0)return;
       if(guidePoints.length)stopGuide();
       view.focus({preventScroll:true});
-      drag={id:e.pointerId,startX:e.clientX,startY:e.clientY,x:e.clientX,y:e.clientY,moved:false};
+      const {x,y}=localPoint(canvas,e.clientX,e.clientY);
+      drag={id:e.pointerId,startX:x,startY:y,x,y,moved:false};
       updatePhotoCursor();
       canvas.setPointerCapture(e.pointerId);
     });
@@ -3727,8 +3819,9 @@
         return;
       }
       if(e.pointerId!==drag.id)return;
-      const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
-      drag.x=e.clientX;drag.y=e.clientY;
+      const {x,y}=localPoint(canvas,e.clientX,e.clientY);
+      const dx=x-drag.x,dy=y-drag.y;
+      drag.x=x;drag.y=y;
       if(Math.abs(drag.x-drag.startX)+Math.abs(drag.y-drag.startY)>5)drag.moved=true;
       yaw-=dx*.004;pitch=T.MathUtils.clamp(pitch-dy*.003,-1.40,1.10);
     });
@@ -3746,14 +3839,11 @@
       drag=null;
       updatePhotoCursor();
     });
-    canvas.addEventListener('lostpointercapture',()=>{
-      drag=null;
-      updatePhotoCursor();
-    });
+    canvas.addEventListener('lostpointercapture',e=>{if(drag?.id===e.pointerId)cancelLook()});
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();showFallback()});
     updateRowboat(0);updateLanterns(0);resize(false);
     ready=true;
-    return {go,update,resize,step(action){
+    return {go,update,resize,cancelLook,step(action){
       if(arrival)return;
       if(guidePoints.length)stopGuide();
       move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
@@ -3764,7 +3854,7 @@
 
   function stopFrames(){
     held.clear();fastWalk=false;cancelAnimationFrame(frame);frame=0;previousTime=0;
-    resetFPS();
+    resetStick();garden?.cancelLook();resetFPS();
   }
   function resetFPS(){
     fpsFrom=fpsFrames=0;
@@ -3803,6 +3893,7 @@
     stopFrames();walkPanel.inert=false;fallback.hidden=false;movement.hidden=true;view.hidden=true;
     if(giButton)giButton.hidden=true;
     if(shadowControl)shadowControl.hidden=true;
+    wideShadows.hidden=true;
     if(movingButton)movingButton.hidden=true;
     distanceSetting.hidden=true;
     select(current);
@@ -3934,14 +4025,14 @@
     button.addEventListener('lostpointercapture',e=>held.delete(e.pointerId));
     button.addEventListener('click',e=>{if(e.detail===0 && garden)garden.step(action)});
   });
-  window.addEventListener('blur',()=>{held.clear();fastWalk=false});
+  window.addEventListener('blur',()=>{held.clear();fastWalk=false;resetStick();garden?.cancelLook()});
   document.addEventListener('visibilitychange',()=>{
     visibilityRevision++;
     if(document.hidden){stopFrames();pauseMusic();ambience.pause()}
     else if(dialog.open){startFrames();playMusic();startAmbience()}
   });
-  if(matchMedia('(pointer:coarse)').matches){
-    document.querySelector('#garden-directions').textContent='Hold a button to move or turn · Drag to look';
+  if(touchInput.matches){
+    document.querySelector('#garden-directions').textContent='Thumbstick to move · Drag the scene to look';
   }
   audioLabel();
   if(location.hash==='#memorial')enter();
