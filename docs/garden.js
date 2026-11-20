@@ -463,11 +463,10 @@
         if(still>.001){
           vec4 projected=poolProjection*vec4(world,1.);
           vec2 q=projected.xy/projected.w*.5+.5;
-          q+=vec2(.0022*sin(swell)+.0013*sin(ripple)*rippleCoverage,.0019*cos(swell));
+          q+=vec2(.060*viewSlope.x,-.19*viewSlope.z);
           if(projected.w>0. && all(greaterThan(q,vec2(0.))) && all(lessThan(q,vec2(1.)))){
             float fur=texture2D(furMask,q).a;
-            float blanket=.27*(1.-smoothstep(.32,.50,length(q-.5)));
-            float strength=(.81+.04*midSlope)*max(fur,blanket)*portraitLight;
+            float strength=(.70+.16*shimmerMask)*mix(.58,1.,sqrt(fresnel))*fur*portraitLight;
             vec3 pigment=furColor(q)*vec3(.83,.93,1.);
             float crest=smoothstep(.87,.995,sin(ripple+.40*sin(chop)))*rippleCoverage;
             float glint=crest*(.5+.5*sin(p.x*2.8+sin(p.y*4.-time*.5)));
@@ -2853,19 +2852,22 @@
     const lights=riverPortrait.lights;
     const formation=new T.Group();formation.visible=false;scene.add(formation);
     const skyWidth=13.5,skyHeight=skyWidth*riverPortrait.height/riverPortrait.width;
-    const apparition=new T.Mesh(new T.PlaneGeometry(skyWidth,skyHeight),new T.ShaderMaterial({
+    const apparition=reflected(new T.Mesh(new T.PlaneGeometry(skyWidth,skyHeight),new T.ShaderMaterial({
       uniforms:{...photoUniforms,reveal:{value:0}},transparent:true,depthWrite:false,
+      blending:T.AdditiveBlending,toneMapped:false,
       vertexShader:`varying vec2 coord;void main(){coord=uv;gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.);}`,
       fragmentShader:`${samplePortrait}
         uniform float reveal;varying vec2 coord;
         void main(){
           vec3 fur=furColor(coord);
           float light=dot(fur,vec3(.213,.715,.072));
-          vec3 moonlit=mix(fur,vec3(.68,.78,1.)*light,.38);
-          gl_FragColor=vec4(moonlit*1.22,texture2D(furMask,coord).a*reveal);
+          vec3 tint=mix(vec3(.46,.65,1.),vec3(1.,.86,.66),smoothstep(.09,.66,light));
+          vec3 moonlit=mix(fur,tint*light,.47);
+          float luminosity=.22+.78*smoothstep(.018,.46,light);
+          gl_FragColor=vec4(moonlit*1.20,texture2D(furMask,coord).a*reveal*luminosity);
           #include <encodings_fragment>
         }`
-    }));
+    })));
     apparition.position.z=-.85;apparition.renderOrder=1;formation.add(apparition);
     const distantShade=new T.LatheGeometry(shadeProfile.getPoints(24),30);
     const shades=new T.InstancedMesh(distantShade,candlePaper(paper.clone()),lights.length);
@@ -2880,21 +2882,21 @@
     }
     const starts=lights.map(()=>({x:rand()*9-4.5,y:rand()*1.2,z:rand()*3-1.5}));
     function showFinale(t){
-      water.material.uniforms.portraitLight.value=T.MathUtils.smoothstep(t,0,2);
+      water.material.uniforms.portraitLight.value=T.MathUtils.smoothstep(t,0,2)*(1-T.MathUtils.smoothstep(t,8.5,12.5));
       formation.visible=t>=5.5;
       if(!formation.visible)return;
       const scale=Math.min(1.15,camera.aspect*1.65);
-      const rise=reduced.matches?0:Math.min(8,Math.max(0,t-13.5)*.39);
+      const rise=reduced.matches?0:Math.min(5,Math.max(0,t-19)*.33);
       formation.scale.setScalar(scale);
-      formation.position.set(ex,7.8+rise,ez-23);
-      apparition.material.uniforms.reveal.value=.62*T.MathUtils.smoothstep(t,6.5,12);
+      formation.position.set(ex,6.9+rise,ez-27);
+      apparition.material.uniforms.reveal.value=.81*T.MathUtils.smoothstep(t,6.5,12);
       for(let i=0;i<lights.length;i++){
         const p=lights[i],from=starts[i],clock=reduced.matches?0:t;
         const settle=reduced.matches?1:T.MathUtils.smoothstep(t,5.5+p.phase*.19,11+p.phase*.32);
         const x=(p.x/riverPortrait.width-.5)*skyWidth+.07*Math.sin(clock*.33+p.phase);
         const y=(.5-p.y/riverPortrait.height)*skyHeight+.085*Math.cos(clock*.28+p.phase);
         matrix.position.set(T.MathUtils.lerp(from.x,x,settle),
-          T.MathUtils.lerp(-7.5/scale+from.y,y,settle),T.MathUtils.lerp(from.z,p.depth,settle));
+          T.MathUtils.lerp((waterLevel-formation.position.y)/scale+from.y,y,settle),T.MathUtils.lerp(from.z,p.depth,settle));
         matrix.rotation.set(0,p.phase,.09*Math.sin(clock*.24+p.phase));
         matrix.scale.setScalar(p.size*T.MathUtils.smoothstep(t,5.5,7.4));
         matrix.updateMatrix();shades.setMatrixAt(i,matrix.matrix);hoops.setMatrixAt(i,matrix.matrix);
@@ -3344,8 +3346,8 @@
       yaw=arrival.yaw+shortest(-arrival.yaw)*ease;
       const waterPitch=poolView.rotation.x;
       const lift=reduced.matches?Number(elapsed>=10):T.MathUtils.smoothstep(elapsed,5.5,12.5);
-      const skyPitch=Math.atan2(formation.position.y-poolView.position.y,poolView.position.z-formation.position.z);
-      pitch=T.MathUtils.lerp(arrival.pitch,T.MathUtils.lerp(waterPitch,skyPitch,lift),ease);
+      const horizonPitch=Math.atan2(waterLevel-poolView.position.y,poolView.position.z-formation.position.z);
+      pitch=T.MathUtils.lerp(arrival.pitch,T.MathUtils.lerp(waterPitch,horizonPitch,lift),ease);
       if(elapsed>=releaseControlsAt){
         arrival=null;
         walkPanel.inert=false;

@@ -132,7 +132,7 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 .garden-fallback.overlook img:first-child,.garden-fallback.overlook .fallback-sky{width:min(69vw,45vh);top:31%;transform:translate(-50%,-50%);animation:lantern-farewell 13s ease-out both}
 .garden-fallback.overlook img:first-child{opacity:.56;filter:saturate(.78)}
 .garden-fallback.overlook .fallback-sky{position:absolute;left:50%;height:auto;aspect-ratio:4/3;display:block}
-.garden-fallback.overlook .fallback-reflection{display:block;top:60%;width:min(86vw,60vh);transform:translate(-50%,-50%) perspective(420px) rotateX(29deg);opacity:.83;filter:saturate(.78)}
+.garden-fallback.overlook .fallback-reflection{display:block;top:60%;width:min(86vw,60vh);transform:translate(-50%,-50%) perspective(420px) rotateX(29deg) scaleY(-1);opacity:.62;filter:saturate(.78)}
 @keyframes lantern-farewell{0%,35%{opacity:0;translate:0 5vh}100%{translate:0 0}}
 @media(prefers-reduced-motion:reduce){.garden-fallback.overlook img:first-child,.garden-fallback.overlook .fallback-sky{animation:none}}
 @media(max-width:650px){.garden-movement{flex-wrap:wrap}.garden-movement #garden-guide{margin:0}.garden-movement p{display:none}}
