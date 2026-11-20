@@ -9,6 +9,9 @@
   const walkPanel = dialog.querySelector('.garden-bottom');
   const music = document.querySelector('#garden-music');
   const sound = document.querySelector('#garden-sound');
+  const settings = dialog.querySelector('.garden-settings');
+  const settingsToggle = settings.querySelector('#garden-settings-toggle');
+  const settingsPanel = settings.querySelector('#garden-settings-panel');
   const giButton = document.querySelector('#garden-gi');
   const shadowControl = document.querySelector('#garden-shadows');
   const movingButton = document.querySelector('#garden-moving-shadows');
@@ -41,11 +44,20 @@
   function saveGraphics(settings){
     try{localStorage.setItem(graphicsKey,JSON.stringify(settings));}catch{}
   }
+  function setSettingsOpen(open){
+    settingsPanel.hidden=!open;
+    settingsToggle.setAttribute('aria-expanded',String(open));
+    if(open){held.clear();fastWalk=false}
+  }
+  settingsToggle.addEventListener('click',()=>setSettingsOpen(settingsPanel.hidden));
+  dialog.addEventListener('pointerdown',e=>{
+    if(!settingsPanel.hidden && !settings.contains(e.target))setSettingsOpen(false);
+  });
   function setLoading(loading){
     loadingView.hidden=!loading;
     dialog.setAttribute('aria-busy',String(loading));
     view.inert=walkPanel.inert=loading;
-    dialog.querySelector('.garden-audio').inert=loading;
+    settings.inert=loading;
   }
   function nextGardenFrame(signal){
     return new Promise((resolve,reject)=>{
@@ -121,7 +133,7 @@
   // Direct links have no entry click to unlock audio. The first walking or
   // viewing gesture can start the river without starting the music.
   function activateOnInteraction(e){
-    if(opening || e.target.closest('#garden-ambience, #garden-gi, #garden-shadows, #garden-moving-shadows, #leave-garden') || e.key==='Escape')return;
+    if(opening || e.target.closest('.garden-settings, #leave-garden') || e.key==='Escape')return;
     if(!ambience.playing)startAmbience();
   }
   dialog.addEventListener('pointerup',activateOnInteraction);
@@ -645,8 +657,9 @@
     hangerEye.rotateY(Math.PI/2);
     const eyeDrop=.094,rodDrop=eyeDrop+.020;
     const flameGeometry=new T.PlaneGeometry(.142,.224);
-    function candlePaper(material){
+    function candlePaper(material,light={value:1}){
       material.onBeforeCompile=shader=>{
+        shader.uniforms.paperLight=light;
         shader.vertexShader='varying vec3 paperNormal,paperView;\n'+shader.vertexShader.replace(
           '#include <project_vertex>',
           `#include <project_vertex>
@@ -657,7 +670,7 @@
            paperNormal=normalMatrix*shadeNormal;
            paperView=-mvPosition.xyz;`
         );
-        shader.fragmentShader='varying vec3 paperNormal,paperView;\n'+shader.fragmentShader.replace(
+        shader.fragmentShader='varying vec3 paperNormal,paperView;\nuniform float paperLight;\n'+shader.fragmentShader.replace(
           '#include <color_fragment>',
           `float paperDensity=diffuseColor.g;
            #include <color_fragment>
@@ -675,7 +688,7 @@
            amber=mix(vec3(.47,.132,.028),amber,hem);
            vec3 radiance=amber*(.73+.25*transmission)
              +vec3(.43,.52,.31)*core*(.17+.83*pow(transmission,1.35))*hem;
-           diffuseColor.rgb=radiance*tint*fibers*mix(1.,.42,ribs);
+           diffuseColor.rgb=radiance*tint*fibers*mix(1.,.42,ribs)*paperLight;
            diffuseColor.a=.04;`
         );
       };
@@ -1913,6 +1926,63 @@
         uv.setXY(j,(ax+.5+uv.getX(j)*(aw-1))/2048,1-(ay+.5+(1-uv.getY(j))*(ah-1))/2048);
       return geo;
     }
+    const pathMemories=[[5,2,1],[11,4,-1],[14,6,1],[2,8,-1]].map(([id,bend,side])=>{
+      const [x,z]=trail[bend], [sx,sz]=trail[bend-1];
+      const along=new T.Vector3(x-sx,0,z-sz).normalize();
+      const across=new T.Vector3(-along.z,0,along.x).multiplyScalar(side);
+      const anchor=new T.Vector3(x,0,z).addScaledVector(along,1.55);
+      const [,,aw,ah]=atlas.regions[id];
+      const material=new T.MeshBasicMaterial({
+        map:atlasMap,transparent:true,depthWrite:false,toneMapped:false,opacity:0
+      });
+      material.onBeforeCompile=shader=>{
+        shader.vertexShader='attribute vec2 pictureUV;\nvarying vec2 memoryUV;\n'
+          +shader.vertexShader.replace('#include <begin_vertex>','#include <begin_vertex>\nmemoryUV=pictureUV;');
+        shader.fragmentShader='varying vec2 memoryUV;\n'+shader.fragmentShader.replace('#include <map_fragment>',`
+          #include <map_fragment>
+          vec2 q=abs(memoryUV*2.-1.);
+          float edge=pow(pow(q.x,4.)+pow(q.y,4.),.25);
+          edge+=.025*sin(memoryUV.y*27.+memoryUV.x*9.)*smoothstep(.5,.85,edge);
+          diffuseColor.a*=1.-smoothstep(.66,.98,edge);
+          diffuseColor.rgb=mix(diffuseColor.rgb*vec3(.84,.90,1.),vec3(.034,.061,.086),.14+.32*edge);
+        `);
+      };
+      const height=Math.min(2.9,4*ah/aw);
+      const picture=new T.Mesh(photoGeometry(id,height*aw/ah,height),material);
+      picture.position.copy(anchor).addScaledVector(across,3.72);
+      picture.position.y=2.26;
+      picture.visible=false;
+      scene.add(picture);
+
+      const light={value:.24};
+      const lamp=new T.Group();
+      lamp.position.copy(picture.position).addScaledVector(along,-.87);
+      lamp.position.y=.58;
+      lamp.scale.setScalar(.88);
+      const shade=candlePaper(new T.MeshBasicMaterial({map:paperMap,side:T.DoubleSide,toneMapped:false}),light);
+      lamp.add(reflected(new T.Mesh(shadeGeometry,shade)),reflected(new T.Mesh(hoopGeometry,bamboo)));
+      const halo=reflected(new T.Sprite(softGlow(lanternGlow.clone())));
+      halo.position.y=.31;halo.scale.setScalar(1.3);lamp.add(halo);
+      scene.add(lamp);
+      return {anchor,picture,light,lamp,halo,age:-1};
+    });
+    function updatePathMemories(dt){
+      const p=camera.position;
+      for(const memory of pathMemories){
+        const {anchor,picture,light,lamp,halo}=memory;
+        const distance=Math.hypot(p.x-anchor.x,p.z-anchor.z);
+        if(arrival || distance>20)memory.age=-1;
+        else if(memory.age>=0)memory.age=Math.min(memory.age+dt,8.3);
+        else if(distance<13)memory.age=0;
+        const reveal=T.MathUtils.smoothstep(memory.age,0,1.2)*(1-T.MathUtils.smoothstep(memory.age,6.7,8.3));
+        picture.visible=reveal>.001;
+        picture.material.opacity=.92*reveal;
+        light.value=.24+.93*reveal;
+        halo.material.opacity=.10+.29*reveal;
+        lamp.position.y=.58+(reduced.matches?0:.08*reveal);
+        if(picture.visible)picture.rotation.y=Math.atan2(p.x-picture.position.x,p.z-picture.position.z);
+      }
+    }
     function frameBorder(w,h,profile,miter=0){
       const positions=[],grain=[],picture=[];
       const corners=[[-1,-1],[1,-1],[1,1],[-1,1]];
@@ -2907,7 +2977,9 @@
       for(const mesh of [shades,hoops,halos])mesh.instanceMatrix.needsUpdate=true;
     }
     let yaw=0,pitch=0,drag=null,elapsed=-1,lastLocation=null;
+    let hover=null;
     const caster=new T.Raycaster();
+    const photoHits=[];
     const waterPlane=new T.Plane(new T.Vector3(0,1,0),-waterLevel);
     const poolHit=new T.Vector3();
     const canvas=renderer.domElement;
@@ -3164,6 +3236,7 @@
       }
       sky.position.set(camera.position.x,0,camera.position.z);
       camera.updateMatrixWorld();
+      if(hover)updatePhotoCursor();
       camera.getWorldDirection(gaze);gaze.y=-gaze.y;
       mirror.position.copy(camera.position);mirror.position.y=2*waterLevel-camera.position.y;
       mirror.lookAt(gaze.add(mirror.position));mirror.updateMatrixWorld();
@@ -3375,32 +3448,22 @@
       const addPoint=([x,z])=>guidePoints.push({x,z});
       const center=room?[room.x,p.z]:riverWalk.bridgeCenter(p.x,p.z) ?? [ex,p.z];
       addPoint(center);
-      const first=rooms[0],firstFront=first.z+first.depth/2,firstBack=first.z-first.depth/2;
-      if(center[1]>=firstFront){
-        addPoint([first.x,firstFront]);
-      }else if(room!==first){
-        // Return along the bridge centerline if the walk starts downstream.
-        for(let i=route.length-1;i>=0;i--){
-          const point=route[i];
-          if(point[1]>center[1] && point[1]<=firstBack)addPoint(point);
-        }
-      }
       const halfView=Math.tan(T.MathUtils.degToRad(camera.fov/2))*camera.aspect;
-      function addPhotos(gallery){
+      function addPhotos(gallery,fromZ=Infinity){
         stations.forEach((station,photo)=>{
-          if(station.room!==gallery)return;
+          if(station.room!==gallery || station.z>fromZ)return;
           const print=portraits[photo].position;
           const frameWidth=station.width+.42;
           const distance=T.MathUtils.clamp(frameWidth/(1.8*halfView),Math.abs(station.x-print.x),gallery.width-1.65);
           guidePoints.push({x:print.x+Math.sin(station.angle)*distance,z:station.z,photo});
         });
       }
-      addPhotos(first);
+      if(room)addPhotos(room,p.z+.001);
       for(const point of route){
-        if(point[1]>firstBack)continue;
+        if(point[1]>=center[1])continue;
         addPoint(point);
         const entry=rooms.find(r=>point[1]===r.z+r.depth/2);
-        if(entry)addPhotos(entry);
+        if(entry && entry!==room)addPhotos(entry);
       }
       addPoint([ex,ez-1.65]);
       setGuide(true);
@@ -3441,6 +3504,16 @@
         const photoHeading=Math.atan2(p.x-print.x,p.z-print.z);
         heading+=shortest(photoHeading-heading)*focus;
         tilt=T.MathUtils.lerp(tilt,Math.atan2(print.y-p.y,Math.hypot(print.x-p.x,print.z-p.z)),focus);
+      }else{
+        let turn=0,focus=0;
+        for(const {picture} of pathMemories){
+          if(!picture.visible)continue;
+          const {position,material}=picture;
+          const angle=shortest(Math.atan2(p.x-position.x,p.z-position.z)-heading);
+          const glance=Math.min(1,material.opacity*2)*(1-T.MathUtils.smoothstep(Math.abs(angle),.55,1.04));
+          if(glance>focus){turn=angle*glance;focus=glance}
+        }
+        heading+=turn;
       }
       turnGuide(heading,tilt,dt);
       if(d>.001){
@@ -3480,7 +3553,7 @@
         camera.position.set(stop.x,1.62,stop.z);
         yaw=stop.angle;pitch=.055;select(index);
       }
-      stopGuide();camera.rotation.set(pitch,yaw,0,'YXZ');draw();
+      stopGuide();updatePathMemories(0);camera.rotation.set(pitch,yaw,0,'YXZ');draw();
     }
     function move(right,forward,turn,dt){
       yaw+=turn*dt*1.55;
@@ -3557,8 +3630,21 @@
         elapsed+=dt;showFinale(elapsed);
         if(arrival)frameFarewell();
       }
+      updatePathMemories(Math.min(.18,dt));
       if(!guideLookTime)updateLocation(p);
       camera.rotation.set(pitch,yaw,0,'YXZ');updateLanterns(time);updateRowboat(nightTime.value);draw();
+    }
+    function photoAt(x,y){
+      const r=canvas.getBoundingClientRect();
+      caster.setFromCamera({x:2*(x-r.left)/r.width-1,y:1-2*(y-r.top)/r.height},camera);
+      if(x<r.left || x>=r.right || y<r.top || y>=r.bottom)return null;
+      photoHits.length=0;
+      const hit=caster.intersectObjects(portraits,false,photoHits).find(hit=>hit.object.visible && hit.distance<9);
+      return hit ? hit.object.userData.index : null;
+    }
+    function updatePhotoCursor(){
+      const clickable=hover && !drag && !arrival && !viewer.open && photoAt(hover.x,hover.y)!==null;
+      canvas.classList.toggle('photo-hover',Boolean(clickable));
     }
     guide.addEventListener('click',follow);
     canvas.addEventListener('pointerdown',e=>{
@@ -3566,10 +3652,20 @@
       if(guidePoints.length)stopGuide();
       view.focus({preventScroll:true});
       drag={id:e.pointerId,x:e.clientX,y:e.clientY,yaw,pitch,moved:false};
+      updatePhotoCursor();
       canvas.setPointerCapture(e.pointerId);
     });
+    canvas.addEventListener('pointerleave',()=>{
+      hover=null;
+      updatePhotoCursor();
+    });
     canvas.addEventListener('pointermove',e=>{
-      if(!drag || e.pointerId!==drag.id)return;
+      if(e.pointerType!=='touch')hover={x:e.clientX,y:e.clientY};
+      if(!drag){
+        updatePhotoCursor();
+        return;
+      }
+      if(e.pointerId!==drag.id)return;
       const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
       if(Math.abs(dx)+Math.abs(dy)>5)drag.moved=true;
       yaw=drag.yaw-dx*.004;pitch=T.MathUtils.clamp(drag.pitch-dy*.003,-1.40,1.10);
@@ -3577,10 +3673,7 @@
     canvas.addEventListener('pointerup',e=>{
       if(!drag || e.pointerId!==drag.id)return;
       if(!drag.moved){
-        const r=canvas.getBoundingClientRect();
-        caster.setFromCamera({x:2*(e.clientX-r.left)/r.width-1,y:1-2*(e.clientY-r.top)/r.height},camera);
-        const hit=caster.intersectObjects(portraits.filter(photo=>photo.visible))[0];
-        let index=hit && hit.distance<9?hit.object.userData.index:null;
+        let index=photoAt(e.clientX,e.clientY);
         if(elapsed>0 && Math.hypot(camera.position.x-ex,camera.position.z-ez)<4 &&
            caster.ray.intersectPlane(waterPlane,poolHit) && poolHit.z<ez-2.35){
           poolHit.project(poolView);
@@ -3589,8 +3682,12 @@
         if(index!==null){select(index);enlarge.focus();enlarge.click()}
       }
       drag=null;
+      updatePhotoCursor();
     });
-    canvas.addEventListener('lostpointercapture',()=>drag=null);
+    canvas.addEventListener('lostpointercapture',()=>{
+      drag=null;
+      updatePhotoCursor();
+    });
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();showFallback()});
     updateRowboat(0);updateLanterns(0);resize(false);
     ready=true;
@@ -3725,10 +3822,17 @@
     if(location.hash!=='#memorial')history.pushState({lanternGarden:true},'','#memorial');
     enter(true);
   }));
-  dialog.addEventListener('cancel',e=>{e.preventDefault();leave()});
+  dialog.addEventListener('cancel',e=>{
+    e.preventDefault();
+    if(!settingsPanel.hidden){
+      setSettingsOpen(false);
+      settingsToggle.focus({preventScroll:true});
+    }else leave();
+  });
   dialog.addEventListener('close',()=>{
     if(dialog.open)return;
     opening?.abort();opening=null;
+    setSettingsOpen(false);
     setLoading(false);
     stopFrames();pauseMusic();music.currentTime=0;
     ambienceActivated=false;ambience.pause();
@@ -3748,7 +3852,7 @@
   const keys={KeyW:'forward',KeyS:'back',KeyA:'strafeLeft',KeyD:'strafeRight',
               ArrowUp:'forward',ArrowDown:'back',ArrowLeft:'left',ArrowRight:'right'};
   dialog.addEventListener('keydown',e=>{
-    if(e.target===shadowControl)return;
+    if(settings.contains(e.target))return;
     const action=keys[e.code];
     if(walkPanel.inert){if(action)e.preventDefault();return}
     fastWalk=e.shiftKey;

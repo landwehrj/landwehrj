@@ -80,9 +80,9 @@ const riverWalk = (() => {
   function bridgeCenter(x,z){
     const b=bridgeAt(x,z);
     if(!b)return null;
-    const dx=b.x-b.sx,dz=b.z-b.sz;
-    const t=Math.max(0,Math.min(1,((x-b.sx)*dx+(z-b.sz)*dz)/(b.length*b.length)));
-    return [b.sx+dx*t,b.sz+dz*t];
+    // Rejoin the centerline at the visitor's downstream position.
+    const t=Math.max(0,Math.min(1,(z-b.sz)/(b.z-b.sz)));
+    return [b.sx+(b.x-b.sx)*t,b.sz+(b.z-b.sz)*t];
   }
   return {rooms,bridges,route,trail,entrance,end,landingWidth,landingDepth,lanternSpans,bridgePoint,bridgeCenter,roomAt,walkable};
 })();

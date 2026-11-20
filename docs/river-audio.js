@@ -1,17 +1,8 @@
 // Ambient sounds share one context so muting or leaving silences both layers.
 function createRiverAmbience(onChange) {
-  const music=document.querySelector('#garden-music');
   const waterVolume=.048;
-  let context, recording, waterGain, foot=0;
+  let context, recording, foot=0;
   let enabled=false;
-
-  function adjustWater(){
-    if(!waterGain)return;
-    // Soaked already contains waves. Blend in the extracted loop when paused.
-    waterGain.gain.setTargetAtTime(music.paused?waterVolume:0,context.currentTime,.17);
-  }
-  music.addEventListener('play',adjustWater);
-  music.addEventListener('pause',adjustWater);
 
   function prepare() {
     context=new (window.AudioContext || window.webkitAudioContext)();
@@ -23,15 +14,13 @@ function createRiverAmbience(onChange) {
       river.buffer=recording;
       river.loop=true;
       river.loopEnd=riverSounds.waterSeconds;
-      waterGain=context.createGain();
-      waterGain.gain.value=0;
-      adjustWater();
+      const waterGain=context.createGain();
+      waterGain.gain.value=waterVolume;
       river.connect(waterGain);waterGain.connect(context.destination);river.start();
       onChange();
     }).catch(()=>{
       enabled=false;
       recording=null;
-      waterGain=null;
       context.close().catch(()=>{});
       context=null;
       onChange();
