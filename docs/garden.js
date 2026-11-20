@@ -3653,7 +3653,7 @@
       if(arrival || drag || e.button!==0)return;
       if(guidePoints.length)stopGuide();
       view.focus({preventScroll:true});
-      drag={id:e.pointerId,x:e.clientX,y:e.clientY,yaw,pitch,moved:false};
+      drag={id:e.pointerId,startX:e.clientX,startY:e.clientY,x:e.clientX,y:e.clientY,moved:false};
       updatePhotoCursor();
       canvas.setPointerCapture(e.pointerId);
     });
@@ -3669,8 +3669,9 @@
       }
       if(e.pointerId!==drag.id)return;
       const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
-      if(Math.abs(dx)+Math.abs(dy)>5)drag.moved=true;
-      yaw=drag.yaw-dx*.004;pitch=T.MathUtils.clamp(drag.pitch-dy*.003,-1.40,1.10);
+      drag.x=e.clientX;drag.y=e.clientY;
+      if(Math.abs(drag.x-drag.startX)+Math.abs(drag.y-drag.startY)>5)drag.moved=true;
+      yaw-=dx*.004;pitch=T.MathUtils.clamp(pitch-dy*.003,-1.40,1.10);
     });
     canvas.addEventListener('pointerup',e=>{
       if(!drag || e.pointerId!==drag.id)return;
