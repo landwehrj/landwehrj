@@ -412,7 +412,7 @@ const riverShore = (() => {
     return rock;
   }
 
-  function landscape(T,{scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random,slate,wood,foliage,paintedStone,forestFloor,time,moonDirection}){
+  function landscape(T,{scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random,slate,wood,foliage,paintedStone,forestFloor,time,moonDirection,horizonColors,horizonShader}){
     const litHeight=waterLevel.toFixed(2);
     const lightMapOffset=(halfWidth*2).toFixed(1);
     const lightMapLength=(lastZ-firstZ).toFixed(1);
@@ -576,21 +576,42 @@ const riverShore = (() => {
       scene.add(reflected(new T.Mesh(mesh,earth)));
     }
 
-    // Two staggered ridges behind the forest, with shallow gradients at the foot.
-    const ridgeMaterial=new T.MeshBasicMaterial({
-      vertexColors:true,side:T.DoubleSide,transparent:true,depthWrite:false,fog:false
+    // Match the sky's color transform so the ridges sit in the same night haze.
+    const ridgeMaterial=new T.ShaderMaterial({
+      uniforms:horizonColors,side:T.DoubleSide,transparent:true,depthWrite:false,
+      toneMapped:false,clipping:true,
+      vertexShader:`
+        #include <clipping_planes_pars_vertex>
+        attribute float ridgeHeight;
+        varying vec3 sightline;
+        varying float crest;
+        void main(){
+          vec4 point=modelMatrix*vec4(position,1.);
+          sightline=point.xyz-cameraPosition;
+          crest=ridgeHeight;
+          vec4 mvPosition=viewMatrix*point;
+          gl_Position=projectionMatrix*mvPosition;
+          #include <clipping_planes_vertex>
+        }`,
+      fragmentShader:`
+        #include <clipping_planes_pars_fragment>
+        ${horizonShader}
+        varying vec3 sightline;
+        varying float crest;
+        void main(){
+          #include <clipping_planes_fragment>
+          float ridgeDistance=length(sightline);
+          float cloudBand;
+          vec3 airColor=skyAtmosphere(sightline/ridgeDistance,cloudBand);
+          float contrast=mix(.19,.075,smoothstep(42.,126.,ridgeDistance))*mix(.42,1.,crest);
+          float opacity=1.-smoothstep(67.,145.,ridgeDistance);
+          gl_FragColor=vec4(airColor*(1.-contrast),opacity);
+          #include <encodings_fragment>
+        }`
     });
-    ridgeMaterial.onBeforeCompile=shader=>{
-      addRiverMist(shader);
-      shader.fragmentShader=shader.fragmentShader.replace('#include <dithering_fragment>',`
-        #include <dithering_fragment>
-        gl_FragColor.a*=1.-smoothstep(67.,145.,distance(cameraPosition,riverSurface));
-      `);
-    };
     for(const side of [-1,1]){
       for(let layer=0;layer<2;layer++){
-        const positions=[],tints=[],index=[];
-        const base=color(layer?'#253951':'#1c2b3e'),peak=color(layer?'#1c2b42':'#142237');
+        const positions=[],heights=[],index=[];
         for(let i=0;i<=195;i++){
           const z=-329+i*2.55;
           const distance=49+layer*34+7*Math.sin(z*.025+side*1.1+layer);
@@ -599,12 +620,12 @@ const riverShore = (() => {
                         +.08*Math.sin(z*.184+side*1.26)+.035*Math.cos(z*.37);
           const height=4+layer*5+(11+layer*8)*Math.pow(Math.max(0,wave),1.3);
           positions.push(x,waterLevel,z,x,height,z);
-          tints.push(...base.toArray(),...peak.toArray());
+          heights.push(0,1);
           if(i<195){const a=i*2;index.push(a,a+1,a+2,a+1,a+3,a+2)}
         }
         const mesh=new T.BufferGeometry();
         mesh.setIndex(index);mesh.setAttribute('position',new T.Float32BufferAttribute(positions,3));
-        mesh.setAttribute('color',new T.Float32BufferAttribute(tints,3));
+        mesh.setAttribute('ridgeHeight',new T.Float32BufferAttribute(heights,1));
         const ridge=reflected(new T.Mesh(mesh,ridgeMaterial));
         ridge.renderOrder=-2-layer;
         scene.add(ridge);

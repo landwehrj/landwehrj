@@ -235,36 +235,46 @@
       draw(canvas.getContext('2d'),size);
       const tex=new T.CanvasTexture(canvas);tex.encoding=T.sRGBEncoding;return tex;
     }
+    const horizonColors={deep:{value:color('#030817')},blue:{value:color('#173970')},mist:{value:color('#284353')}};
+    const horizonShader=`uniform vec3 deep,blue,mist;
+      float skyHash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+      float skyNoise(vec2 p){
+        vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+        return mix(mix(skyHash(i),skyHash(i+vec2(1.,0.)),f.x),mix(skyHash(i+vec2(0.,1.)),skyHash(i+1.),f.x),f.y);
+      }
+      float skyOpening(vec3 direction){
+        return .24+.76*pow(max(0.,dot(direction,normalize(vec3(-.64,.24,-1.)))),5.);
+      }
+      vec3 skyAtmosphere(vec3 direction,out float cloudBand){
+        float h=max(direction.y,0.);
+        float opening=skyOpening(direction);
+        vec3 color=mix(deep,blue,opening*exp(-3.25*h));
+        color=mix(color,mist,(1.-smoothstep(-.025,.14,h))*.65);
+        vec2 p=direction.xz/(.52+h)*vec2(8.,19.);
+        float cloud=.63*skyNoise(p)+.24*skyNoise(p*2.05)+.13*skyNoise(p*4.1);
+        cloudBand=smoothstep(.46,.79,cloud)*smoothstep(.03,.21,h)*(1.-smoothstep(.47,.80,h));
+        return color+cloudBand*vec3(.012,.019,.031)*opening;
+      }`;
     const sky=new T.Mesh(new T.SphereGeometry(135,64,24),new T.ShaderMaterial({
-      side:T.BackSide,depthWrite:false,
+      side:T.BackSide,depthWrite:false,toneMapped:false,
       extensions:{derivatives:true},
-      uniforms:{deep:{value:color('#030817')},blue:{value:color('#173970')},mist:{value:color('#284353')},moonDirection},
+      uniforms:{...horizonColors,moonDirection},
       vertexShader:`varying vec3 place;
         void main(){
           vec4 point=modelMatrix*vec4(position,1.);
           place=point.xyz-cameraPosition;
           gl_Position=projectionMatrix*viewMatrix*point;
         }`,
-      fragmentShader:`uniform vec3 deep,blue,mist,moonDirection;varying vec3 place;
-        float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
-        float noise(vec2 p){
-          vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
-          return mix(mix(hash(i),hash(i+vec2(1.,0.)),f.x),mix(hash(i+vec2(0.,1.)),hash(i+1.),f.x),f.y);
-        }
+      fragmentShader:`${horizonShader}
+        uniform vec3 moonDirection;varying vec3 place;
         void main(){
           vec3 d=normalize(place);
-          float h=max(d.y,0.);
-          float opening=.24+.76*pow(max(0.,dot(d,normalize(vec3(-.64,.24,-1.)))),5.);
-          vec3 c=mix(deep,blue,opening*exp(-3.25*h));
-          c=mix(c,mist,(1.-smoothstep(-.025,.14,h))*.65);
-          vec2 p=d.xz/(.52+h)*vec2(8.,19.);
-          float cloud=.63*noise(p)+.24*noise(p*2.05)+.13*noise(p*4.1);
-          float cloudBand=smoothstep(.46,.79,cloud)*smoothstep(.03,.21,h)*(1.-smoothstep(.47,.80,h));
-          c+=cloudBand*vec3(.012,.019,.031)*opening;
+          float cloudBand;
+          vec3 c=skyAtmosphere(d,cloudBand);
           vec2 q=vec2(atan(d.z,d.x),d.y)*vec2(69.,94.);
           vec2 f=fract(q)-.5;
-          float star=hash(floor(q));
-          float starlight=step(.964,star)*exp(-102.*dot(f,f))*smoothstep(.12,.47,h);
+          float star=skyHash(floor(q));
+          float starlight=step(.964,star)*exp(-102.*dot(f,f))*smoothstep(.12,.47,d.y);
           c+=vec3(.18,.25,.37)*starlight*(1.-cloudBand);
           if(dot(d,moonDirection)>.990){
             vec3 across=normalize(cross(vec3(0.,1.,0.),moonDirection));
@@ -278,7 +288,7 @@
             if(disc>0.){
               vec2 west=lunar+vec2(.29,-.24),east=lunar-vec2(.37,.22);
               float seas=.78*exp(-5.8*dot(west,west))+.62*exp(-8.2*dot(east,east));
-              float rock=.18*noise(lunar*5.+7.)+.08*noise(lunar*17.-5.);
+              float rock=.18*skyNoise(lunar*5.+7.)+.08*skyNoise(lunar*17.-5.);
               float face=.79+rock-seas*.24+.09*sqrt(max(0.,1.-radius*radius));
               c=mix(c,vec3(.85,.92,1.)*face,disc*(1.-cloudBand*.24));
             }
@@ -1264,7 +1274,8 @@
     riverShore.landscape(T,{
       scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,
       slate:stonePores,wood:photoMaterials.wood,foliage:photoMaterials.foliage,
-      paintedStone:photoMaterials.paintedStone,forestFloor:photoMaterials.forestFloor,time:nightTime,moonDirection
+      paintedStone:photoMaterials.paintedStone,forestFloor:photoMaterials.forestFloor,time:nightTime,moonDirection,
+      horizonColors,horizonShader
     });
     const bankShade=new T.LatheGeometry(shadeProfile.getPoints(16),20);
     const bankHoop=new T.TorusGeometry(.158,.012,5,14).rotateX(Math.PI/2);
@@ -2083,7 +2094,7 @@
         batch(trim,frameScrew,px+.083*side,pictureY-.018,pz,.038,.130,.082);
         const pic=new T.Mesh(photoGeometry(id,pw,ph),photoMat);
         pic.position.set(px-.037*side,mid,pz);pic.rotation.y=angle;pic.userData.index=stations.length;
-        scene.add(reflected(pic));portraits.push(pic);stations.push({x:px-side*3.55,z:pz,angle,room});
+        scene.add(reflected(pic));portraits.push(pic);stations.push({x:px-side*3.55,z:pz,angle,room,width:pw});
         const lampX=px-side*.54,lampZ=pz+pw/2+.38;
         const glass=new T.Mesh(new T.PlaneGeometry(pw+.216,ph+.216),pictureGlass);
         glass.position.set(px-.073*side,mid,pz);
@@ -2892,7 +2903,7 @@
       }
       for(const mesh of [shades,hoops,halos])mesh.instanceMatrix.needsUpdate=true;
     }
-    let yaw=0,pitch=0,drag=null,guideTarget=-1,elapsed=-1,lastLocation=null;
+    let yaw=0,pitch=0,drag=null,elapsed=-1,lastLocation=null;
     const caster=new T.Raycaster();
     const waterPlane=new T.Plane(new T.Vector3(0,1,0),-waterLevel);
     const poolHit=new T.Vector3();
@@ -3303,7 +3314,9 @@
       }finally{graphicsSetup=null;}
     }
     function shortest(a){return Math.atan2(Math.sin(a),Math.cos(a))}
-    let guidePoints=[],guideHeading=0,arrival=null;
+    let guidePoints=[],guideTarget=0,guideRunning=false,guideLookTime=0,arrival=null;
+    let guideTurnRate=0,guideMoveTime=0;
+    const photoHold=5;
     let untilStep=.52;
     function footfalls(oldX,oldZ){
       const p=camera.position;
@@ -3317,7 +3330,7 @@
     function beginFarewell(){
       elapsed=0;untilStep=.52;
       arrival={position:camera.position.clone(),pitch,yaw};
-      setGuide(-1);
+      stopGuide();
       held.clear();fastWalk=false;
       if(drag && canvas.hasPointerCapture(drag.id))canvas.releasePointerCapture(drag.id);
       drag=null;
@@ -3338,37 +3351,113 @@
         walkPanel.inert=false;
       }
     }
-    function setGuide(index){
-      guideTarget=index;
-      guide.textContent=index>=0?'Pause walk':elapsed>=0 && Math.hypot(camera.position.x-ex,camera.position.z-ez)<4?'Watch again':'Follow the river';
-      guide.setAttribute('aria-pressed',String(index>=0));
+    function setGuide(running){
+      guideRunning=running;
+      guideTurnRate=0;guideMoveTime=0;
+      const atOverlook=elapsed>=0 && Math.hypot(camera.position.x-ex,camera.position.z-ez)<4;
+      guide.textContent=running?'Pause walk':guidePoints.length?'Resume walk':atOverlook?'Watch again':'Follow the river';
+      guide.setAttribute('aria-pressed',String(running));
+    }
+    function stopGuide(){
+      guidePoints=[];guideTarget=0;guideLookTime=0;
+      setGuide(false);
     }
     function follow(){
-      if(guideTarget>=0){setGuide(-1);return}
+      if(arrival || drag)return;
+      if(guidePoints.length){setGuide(!guideRunning);return}
       const p=camera.position,room=riverWalk.roomAt(p.x,p.z);
       if(elapsed>=0 && Math.hypot(p.x-ex,p.z-ez)<4){
         beginFarewell();return;
       }
-      guidePoints=[];
-      const center=room?[room.x,p.z]:riverWalk.bridgeCenter(p.x,p.z);
-      if(center)guidePoints.push(center);
-      const fromZ=center?.[1]??p.z;
-      guidePoints.push(...route.filter(([,z])=>z<fromZ-.02));
-      if(p.z>ez-1.6)guidePoints.push([ex,ez-1.65]);
-      if(!guidePoints.length)return;
-      guideHeading=yaw;setGuide(0);
+      const addPoint=([x,z])=>guidePoints.push({x,z});
+      const center=room?[room.x,p.z]:riverWalk.bridgeCenter(p.x,p.z) ?? [ex,p.z];
+      addPoint(center);
+      const first=rooms[0],firstFront=first.z+first.depth/2,firstBack=first.z-first.depth/2;
+      if(center[1]>=firstFront){
+        addPoint([first.x,firstFront]);
+      }else if(room!==first){
+        // Return along the bridge centerline if the walk starts downstream.
+        for(let i=route.length-1;i>=0;i--){
+          const point=route[i];
+          if(point[1]>center[1] && point[1]<=firstBack)addPoint(point);
+        }
+      }
+      const halfView=Math.tan(T.MathUtils.degToRad(camera.fov/2))*camera.aspect;
+      function addPhotos(gallery){
+        stations.forEach((station,photo)=>{
+          if(station.room!==gallery)return;
+          const print=portraits[photo].position;
+          const frameWidth=station.width+.42;
+          const distance=T.MathUtils.clamp(frameWidth/(1.8*halfView),Math.abs(station.x-print.x),gallery.width-1.65);
+          guidePoints.push({x:print.x+Math.sin(station.angle)*distance,z:station.z,photo});
+        });
+      }
+      addPhotos(first);
+      for(const point of route){
+        if(point[1]>firstBack)continue;
+        addPoint(point);
+        const entry=rooms.find(r=>point[1]===r.z+r.depth/2);
+        if(entry)addPhotos(entry);
+      }
+      addPoint([ex,ez-1.65]);
+      setGuide(true);
+    }
+    function lookAheadHeading(p){
+      // Look past the next corner while walking along the deck centerline.
+      let ahead=3,fromX=p.x,fromZ=p.z;
+      for(let i=guideTarget;i<guidePoints.length;i++){
+        const {x,z,photo}=guidePoints[i];
+        const dx=x-fromX,dz=z-fromZ,length=Math.hypot(dx,dz);
+        if(length>ahead){
+          const t=ahead/length;
+          return Math.atan2(p.x-fromX-dx*t,p.z-fromZ-dz*t);
+        }
+        ahead-=length;fromX=x;fromZ=z;
+        if(photo!==undefined)break;
+      }
+      return Math.hypot(fromX-p.x,fromZ-p.z)>.001?Math.atan2(p.x-fromX,p.z-fromZ):yaw;
+    }
+    function turnGuide(heading,tilt,dt){
+      const error=shortest(heading-yaw);
+      // Keep angular speed continuous when the next turn changes direction.
+      const desiredRate=T.MathUtils.clamp(error*3,-1.18,1.18);
+      const maxChange=3.2*dt;
+      const nextRate=guideTurnRate+T.MathUtils.clamp(desiredRate-guideTurnRate,-maxChange,maxChange);
+      yaw+=(guideTurnRate+nextRate)*.5*dt;
+      guideTurnRate=nextRate;
+      pitch=T.MathUtils.damp(pitch,tilt,4,dt);
     }
     function advanceGuide(dt){
-      const [x,z]=guidePoints[guideTarget],p=camera.position;
+      const {x,z,photo}=guidePoints[guideTarget],p=camera.position;
       const dx=x-p.x,dz=z-p.z,d=Math.hypot(dx,dz);
-      if(d>.01){
-        guideHeading=Math.atan2(-dx,-dz);
-        const step=Math.min(1,dt*3.25*(fastWalk?2.2:1)/d);
-        walk(dx*step,dz*step);
+      const print=portraits[photo]?.position;
+      let heading=lookAheadHeading(p),tilt=.015;
+      if(print){
+        const fromPhoto=guidePoints[guideTarget-1]?.photo!==undefined;
+        const focus=fromPhoto?1:1-T.MathUtils.smoothstep(d,.55,3.3);
+        const photoHeading=Math.atan2(p.x-print.x,p.z-print.z);
+        heading+=shortest(photoHeading-heading)*focus;
+        tilt=T.MathUtils.lerp(tilt,Math.atan2(print.y-p.y,Math.hypot(print.x-p.x,print.z-p.z)),focus);
       }
-      yaw+=shortest(guideHeading-yaw)*Math.min(1,dt*3.5);
-      pitch+=(.015-pitch)*Math.min(1,dt*2);
-      if(d<.07)setGuide(guideTarget+1<guidePoints.length?guideTarget+1:-1);
+      turnGuide(heading,tilt,dt);
+      if(d>.001){
+        guideMoveTime+=dt;
+        const leaving=.24+.76*T.MathUtils.smoothstep(guideMoveTime,0,1.1);
+        const approaching=print ? .24+.76*T.MathUtils.smoothstep(d,0,1.65) : 1;
+        const speed=3*(fastWalk?2.2:1)*Math.min(leaving,approaching);
+        const step=Math.min(1,speed*dt/d);
+        walk(dx*step,dz*step);
+        if(print || Math.hypot(x-p.x,z-p.z)>.001)return;
+      }
+      if(print){
+        if(Math.abs(shortest(heading-yaw))>.012 || Math.abs(guideTurnRate)>.06 || Math.abs(pitch-tilt)>.015)return;
+        if(current!==photo || enlarge.hidden)select(photo);
+        guideLookTime+=dt;
+        if(guideLookTime<photoHold)return;
+        guideMoveTime=0;
+      }
+      guideLookTime=0;
+      if(++guideTarget===guidePoints.length)beginFarewell();
     }
     function go(index,reset=false){
       if(reset){arrival=null;walkPanel.inert=Boolean(opening);elapsed=-1;showFinale(-1)}
@@ -3388,7 +3477,7 @@
         camera.position.set(stop.x,1.62,stop.z);
         yaw=stop.angle;pitch=.055;select(index);
       }
-      setGuide(-1);camera.rotation.set(pitch,yaw,0,'YXZ');draw();
+      stopGuide();camera.rotation.set(pitch,yaw,0,'YXZ');draw();
     }
     function move(right,forward,turn,dt){
       yaw+=turn*dt*1.55;
@@ -3423,21 +3512,7 @@
       if(lastLocation===detail && enlarge.hidden)return;
       lastLocation=detail;locationEl.textContent=title;captionEl.textContent=detail;enlarge.hidden=true;
     }
-    function update(dt,time){
-      const p=camera.position;
-      if(!arrival){
-        const walkDt=Math.min(.18,dt);
-        if(held.size)setGuide(-1);
-        if(guideTarget>=0)advanceGuide(walkDt);
-        else move(Number(held.has('strafeRight'))-Number(held.has('strafeLeft')),
-                  Number(held.has('forward'))-Number(held.has('back')),
-                  Number(held.has('left'))-Number(held.has('right')),walkDt);
-        if(elapsed<0 && Math.abs(p.x-ex)<3 && p.z<ez-1.18)beginFarewell();
-      }
-      if(elapsed>=0){
-        elapsed+=dt;showFinale(elapsed);
-        if(arrival)frameFarewell();
-      }
+    function updateLocation(p){
       const room=riverWalk.roomAt(p.x,p.z);
       if(elapsed>=0 && Math.hypot(p.x-ex,p.z-ez)<5){
         if(current!==finalIndex || enlarge.hidden)select(finalIndex);
@@ -3463,12 +3538,30 @@
         const next=rooms.find(r=>r.z<p.z);
         if(next)pathCaption('Across the water',next.name);
       }
+    }
+    function update(dt,time){
+      const p=camera.position;
+      if(!arrival){
+        const walkDt=Math.min(.18,dt);
+        if(held.size && guidePoints.length)stopGuide();
+        if(guideRunning)advanceGuide(walkDt);
+        else move(Number(held.has('strafeRight'))-Number(held.has('strafeLeft')),
+                  Number(held.has('forward'))-Number(held.has('back')),
+                  Number(held.has('left'))-Number(held.has('right')),walkDt);
+        if(!guidePoints.length && elapsed<0 && Math.abs(p.x-ex)<3 && p.z<ez-1.18)beginFarewell();
+      }
+      if(elapsed>=0){
+        elapsed+=dt;showFinale(elapsed);
+        if(arrival)frameFarewell();
+      }
+      if(!guideLookTime)updateLocation(p);
       camera.rotation.set(pitch,yaw,0,'YXZ');updateLanterns(time);updateRowboat(nightTime.value);draw();
     }
     guide.addEventListener('click',follow);
     canvas.addEventListener('pointerdown',e=>{
       if(arrival || drag || e.button!==0)return;
-      setGuide(-1);view.focus({preventScroll:true});
+      if(guidePoints.length)stopGuide();
+      view.focus({preventScroll:true});
       drag={id:e.pointerId,x:e.clientX,y:e.clientY,yaw,pitch,moved:false};
       canvas.setPointerCapture(e.pointerId);
     });
@@ -3500,7 +3593,8 @@
     ready=true;
     return {go,update,resize,step(action){
       if(arrival)return;
-      setGuide(-1);move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
+      if(guidePoints.length)stopGuide();
+      move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
     },initialiseGraphics,resetScene(){
       updateLanterns(0);updateRowboat(nightTime.value);go(0,true);
     }};
