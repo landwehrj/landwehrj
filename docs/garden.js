@@ -114,7 +114,7 @@
     sound.setAttribute('aria-label', playing ? 'Mute ambient music' : 'Play ambient music');
   }
   const ambienceButton=document.querySelector('#garden-ambience');
-  let wantAmbience=true, ambienceActivated=false;
+  let wantAmbience=true;
   const ambience=createRiverAmbience(()=>{
     ambienceButton.textContent=ambience.playing?'Ambience on':'Ambience off';
     ambienceButton.setAttribute('aria-pressed',String(ambience.playing));
@@ -122,19 +122,19 @@
   });
   function startAmbience(){
     if(!wantAmbience || !dialog.open || document.hidden)return;
-    ambienceActivated=true;
     if(!ambience.playing)ambience.start();
   }
   ambienceButton.setAttribute('aria-label','Play river and footsteps');
   ambienceButton.addEventListener('click',()=>{
+    if(music.paused)playMusic();
     wantAmbience=!ambience.playing;
     if(wantAmbience)startAmbience();else ambience.pause();
   });
-  // Direct links have no entry click to unlock audio. The first walking or
-  // viewing gesture can start the river without starting the music.
+  // Retry both layers on a gesture if the browser blocks autoplay on a direct link.
   function activateOnInteraction(e){
-    if(opening || e.target.closest('.garden-settings, #leave-garden') || e.key==='Escape')return;
-    if(!ambience.playing)startAmbience();
+    if(e.target.closest('#garden-sound, #garden-ambience, #leave-garden') || e.key==='Escape')return;
+    if(music.paused)playMusic();
+    startAmbience();
   }
   dialog.addEventListener('pointerup',activateOnInteraction);
   dialog.addEventListener('keydown',activateOnInteraction);
@@ -142,8 +142,8 @@
   music.addEventListener('play', audioLabel);
   music.addEventListener('pause', audioLabel);
   function playMusic() {
-    const attempt = ++audioAttempt;
     if (!desiredMusic || !dialog.open || document.hidden) return;
+    const attempt = ++audioAttempt;
     return music.play().catch(() => {
       if (attempt === audioAttempt) audioLabel();
     });
@@ -328,6 +328,7 @@
     const reflectionClip=[new T.Plane(new T.Vector3(0,1,0),-waterLevel+.018)];
     const reflectionPixel=new T.Vector2();
     const [ex,ez]=end;
+    const overlookEntranceZ=ez+landingDepth/2;
     const boatBerth={x:arrivalDock[0]+2.48,z:entryThresholdZ+2.25};
     const boatWaterFrame={value:new T.Vector4(boatBerth.x,boatBerth.z,1,0)};
     const moorings=[...rooms,{x:ex,z:ez,width:landingWidth,depth:landingDepth},
@@ -3460,12 +3461,13 @@
       }
       if(room)addPhotos(room,p.z+.001);
       for(const point of route){
+        if(point[1]<=overlookEntranceZ)break;
         if(point[1]>=center[1])continue;
         addPoint(point);
         const entry=rooms.find(r=>point[1]===r.z+r.depth/2);
         if(entry && entry!==room)addPhotos(entry);
       }
-      addPoint([ex,ez-1.65]);
+      addPoint([ex,overlookEntranceZ]);
       setGuide(true);
     }
     function lookAheadHeading(p){
@@ -3624,7 +3626,7 @@
         else move(Number(held.has('strafeRight'))-Number(held.has('strafeLeft')),
                   Number(held.has('forward'))-Number(held.has('back')),
                   Number(held.has('left'))-Number(held.has('right')),walkDt);
-        if(!guidePoints.length && elapsed<0 && Math.abs(p.x-ex)<3 && p.z<ez-1.18)beginFarewell();
+        if(elapsed<0 && p.z<=overlookEntranceZ && Math.abs(p.x-ex)<landingWidth/2)beginFarewell();
       }
       if(elapsed>=0){
         elapsed+=dt;showFinale(elapsed);
@@ -3773,7 +3775,7 @@
     });
     return preparing;
   }
-  async function enter(userGesture){
+  async function enter(){
     if(dialog.open)return;
     opening?.abort();
     const session=new AbortController(),{signal}=session;
@@ -3782,8 +3784,8 @@
     setLoading(true);
     dialog.showModal();
     select(0);
-    const musicStarting=userGesture?playMusic():null;
-    if(userGesture)startAmbience();
+    const musicStarting=playMusic();
+    startAmbience();
     const soundReady=musicStarting && Promise.race([musicStarting,new Promise(resolve=>setTimeout(resolve,1600))]);
     try{
       // Give the loading screen a paint before building or drawing the scene.
@@ -3820,7 +3822,7 @@
     if(e.button!==0 || e.ctrlKey || e.shiftKey || e.metaKey || e.altKey)return;
     e.preventDefault();entrance=link;
     if(location.hash!=='#memorial')history.pushState({lanternGarden:true},'','#memorial');
-    enter(true);
+    enter();
   }));
   dialog.addEventListener('cancel',e=>{
     e.preventDefault();
@@ -3835,12 +3837,12 @@
     setSettingsOpen(false);
     setLoading(false);
     stopFrames();pauseMusic();music.currentTime=0;
-    ambienceActivated=false;ambience.pause();
+    ambience.pause();
     entrance?.focus({preventScroll:true});
   });
   document.querySelector('#leave-garden').addEventListener('click',leave);
   window.addEventListener('hashchange',()=>{
-    if(location.hash==='#memorial')enter(false);
+    if(location.hash==='#memorial')enter();
     else if(dialog.open){if(viewer.open)viewer.close();dialog.close()}
   });
   for(const [id,delta] of [['garden-prev',-1],['garden-next',1]]){
@@ -3873,11 +3875,11 @@
   document.addEventListener('visibilitychange',()=>{
     visibilityRevision++;
     if(document.hidden){stopFrames();pauseMusic();ambience.pause()}
-    else if(dialog.open){startFrames();playMusic();if(ambienceActivated)startAmbience()}
+    else if(dialog.open){startFrames();playMusic();startAmbience()}
   });
   if(matchMedia('(pointer:coarse)').matches){
     document.querySelector('#garden-directions').textContent='Hold arrows to walk · Drag to look';
   }
   audioLabel();
-  if(location.hash==='#memorial')enter(false);
+  if(location.hash==='#memorial')enter();
 })();
