@@ -15,6 +15,11 @@
   const giButton = document.querySelector('#garden-gi');
   const shadowControl = document.querySelector('#garden-shadows');
   const movingButton = document.querySelector('#garden-moving-shadows');
+  const distanceControl = document.querySelector('#garden-distance');
+  const distanceSetting = distanceControl.closest('.garden-view-distance');
+  const distanceValue = distanceSetting.querySelector('output');
+  const defaultViewDistance = distanceControl.valueAsNumber;
+  const retestViewDistance = new URLSearchParams(location.search).get('retest')==='view-distance';
   const graphicsKey='lantern-river.graphics.v1';
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
@@ -30,8 +35,13 @@
   let fpsFrom=0,fpsFrames=0;
   let visibilityRevision=0;
   let desiredMusic = true, audioAttempt = 0, entrance;
-  const held = new Set();
+  const held = new Map();
   let fastWalk=false;
+
+  function isHeld(action){
+    for(const pressed of held.values())if(pressed===action)return true;
+    return false;
+  }
 
   function savedGraphics(){
     try{
@@ -176,8 +186,7 @@
     renderer.toneMapping=T.ACESFilmicToneMapping;
     renderer.toneMappingExposure=.96;
     const scene = new T.Scene();
-    // Keep the finale in range from the entrance after a visitor walks back upstream.
-    const camera = new T.PerspectiveCamera(56,1,.07,280);
+    const camera = new T.PerspectiveCamera(56,1,.07,defaultViewDistance);
     camera.rotation.order = 'YXZ';
     const color = value => new T.Color(value).convertSRGBToLinear();
     const waterLevel=-.43;
@@ -2961,7 +2970,11 @@
       const rise=reduced.matches?0:Math.min(5,Math.max(0,t-19)*.33);
       formation.scale.setScalar(scale);
       formation.position.set(ex,6.9+rise,ez-27);
-      apparition.material.uniforms.reveal.value=.81*T.MathUtils.smoothstep(t,6.5,12);
+      // Fade the whole formation before the camera's far plane can slice through it.
+      const distanceFade=T.MathUtils.smoothstep(camera.far-camera.position.distanceTo(formation.position),14,34);
+      formation.visible=distanceFade>0;
+      if(!formation.visible)return;
+      apparition.material.uniforms.reveal.value=.81*T.MathUtils.smoothstep(t,6.5,12)*distanceFade;
       for(let i=0;i<lights.length;i++){
         const p=lights[i],from=starts[i],clock=reduced.matches?0:t;
         const settle=reduced.matches?1:T.MathUtils.smoothstep(t,5.5+p.phase*.19,11+p.phase*.32);
@@ -2970,7 +2983,7 @@
         matrix.position.set(T.MathUtils.lerp(from.x,x,settle),
           T.MathUtils.lerp((waterLevel-formation.position.y)/scale+from.y,y,settle),T.MathUtils.lerp(from.z,p.depth,settle));
         matrix.rotation.set(0,p.phase,.09*Math.sin(clock*.24+p.phase));
-        matrix.scale.setScalar(p.size*T.MathUtils.smoothstep(t,5.5,7.4));
+        matrix.scale.setScalar(p.size*T.MathUtils.smoothstep(t,5.5,7.4)*distanceFade);
         matrix.updateMatrix();shades.setMatrixAt(i,matrix.matrix);hoops.setMatrixAt(i,matrix.matrix);
         matrix.position.y+=matrix.scale.x*.3;matrix.rotation.set(0,0,0);matrix.scale.multiplyScalar(1.52);
         matrix.updateMatrix();halos.setMatrixAt(i,matrix.matrix);
@@ -3270,10 +3283,24 @@
       if(redraw)draw();
     }
     new ResizeObserver(()=>resize(!opening)).observe(view);
-    function graphicsSettings(){
-      return {shadows:shadowValues?.riverShadowMode.value ?? 0,moving:movingEnabled,gi:Boolean(giUniforms?.riverGIEnabled.value)};
+    function setViewDistance(distance){
+      distanceControl.value=String(Number.isFinite(distance)?distance:defaultViewDistance);
+      camera.far=distanceControl.valueAsNumber;
+      camera.updateProjectionMatrix();
+      distanceValue.value=distanceControl.value;
     }
+    function graphicsSettings(){
+      return {shadows:shadowValues?.riverShadowMode.value ?? 0,moving:movingEnabled,
+        gi:Boolean(giUniforms?.riverGIEnabled.value),viewDistance:camera.far};
+    }
+    distanceSetting.hidden=false;
+    distanceControl.addEventListener('input',()=>{
+      setViewDistance(distanceControl.valueAsNumber);
+      saveGraphics(graphicsSettings());
+      resetFPS();
+    });
     async function applyStartupGraphics(settings){
+      setViewDistance(settings.viewDistance);
       if(shadowValues){
         shadowControl.value=String(settings.shadows);
         await changeShadows(false);
@@ -3301,7 +3328,7 @@
         }
       }finally{gl.deleteSync(fence);}
     }
-    async function measureGraphics(signal,duration=1050){
+    async function measureGraphics(signal,duration=1050,warmup=350){
       let start=await nextGardenFrame(signal),previous=start;
       let revision=visibilityRevision;
       const frames=[];
@@ -3316,12 +3343,37 @@
           frames.length=0;
           continue;
         }
-        if(previous-start>=350 && now>previous)frames.push(now-previous);
+        if(previous-start>=warmup && now>previous)frames.push(now-previous);
         previous=now;
       }while(previous-start<duration || !frames.length);
       frames.sort((a,b)=>a-b);
       return {mean:frames.reduce((sum,frame)=>sum+frame,0)/frames.length,
         slow:frames[Math.floor((frames.length-1)*.9)],worst:frames[frames.length-1]};
+    }
+    const smooth=sample=>sample.mean<=20 && sample.slow<=25;
+    async function testViewDistance(signal){
+      loadingStatus.textContent='Testing view distance…';
+      camera.position.set(arrivalDock[0]+.3,1.62,arrivalDock[1]-4.1);
+      camera.lookAt(ex,1.5,ez);
+      setViewDistance(defaultViewDistance);
+      let fullRange=await measureGraphics(signal);
+      if(smooth(fullRange))return fullRange;
+
+      const minimum=Number(distanceControl.min);
+      setViewDistance(minimum);
+      const shortRange=await measureGraphics(signal,750,0);
+      signal.throwIfAborted();
+      setViewDistance(defaultViewDistance);
+      const improves=full=>shortRange.mean<=full.mean*.88 && shortRange.slow<=full.slow;
+      if(improves(fullRange)){
+        // Recheck at full range after the renderer and GPU have warmed up.
+        fullRange=await measureGraphics(signal,750,0);
+        if(!smooth(fullRange) && improves(fullRange)){
+          setViewDistance(minimum);
+          return shortRange;
+        }
+      }
+      return fullRange;
     }
     let graphicsSetup,graphicsReady=false;
     async function configureStartupGraphics(signal){
@@ -3329,14 +3381,21 @@
       loadingStatus.textContent='Loading shadows…';
       await applyStartupGraphics(stored || {shadows:3,moving:false,gi:false});
       signal.throwIfAborted();
-      if(stored || (!shadowValues && !movingLanterns.length))return;
+      if(Number.isFinite(stored?.viewDistance) && !retestViewDistance)return;
+
+      const baseline=await testViewDistance(signal);
+      signal.throwIfAborted();
+      if(retestViewDistance){
+        const url=new URL(location.href);
+        url.searchParams.delete('retest');
+        history.replaceState(history.state,'',url);
+      }
+      if(stored || (!shadowValues && !movingLanterns.length)){
+        saveGraphics(graphicsSettings());
+        return;
+      }
 
       loadingStatus.textContent='Testing graphics…';
-      const room=rooms[1],next=rooms[2];
-      camera.position.set(room.x,1.62,room.z-2.15);
-      camera.lookAt(next.x-.8,1.45,next.z);
-      const baseline=await measureGraphics(signal);
-      const smooth=sample=>sample.mean<=20 && sample.slow<=25;
       if(smooth(baseline)){
         let reference=baseline;
         if(movingLanterns.length){
@@ -3558,7 +3617,7 @@
       stopGuide();updatePathMemories(0);camera.rotation.set(pitch,yaw,0,'YXZ');draw();
     }
     function move(right,forward,turn,dt){
-      yaw+=turn*dt*1.55;
+      if(!drag)yaw+=turn*dt*1.55;
       if(!right && !forward)return;
       const k=dt*(fastWalk?6.6:3)/Math.max(1,Math.hypot(right,forward));
       const dx=(Math.cos(yaw)*right-Math.sin(yaw)*forward)*k;
@@ -3623,9 +3682,9 @@
         const walkDt=Math.min(.18,dt);
         if(held.size && guidePoints.length)stopGuide();
         if(guideRunning)advanceGuide(walkDt);
-        else move(Number(held.has('strafeRight'))-Number(held.has('strafeLeft')),
-                  Number(held.has('forward'))-Number(held.has('back')),
-                  Number(held.has('left'))-Number(held.has('right')),walkDt);
+        else move(Number(isHeld('strafeRight'))-Number(isHeld('strafeLeft')),
+                  Number(isHeld('forward'))-Number(isHeld('back')),
+                  Number(isHeld('left'))-Number(isHeld('right')),walkDt);
         if(elapsed<0 && p.z<=overlookEntranceZ && Math.abs(p.x-ex)<landingWidth/2)beginFarewell();
       }
       if(elapsed>=0){
@@ -3745,6 +3804,7 @@
     if(giButton)giButton.hidden=true;
     if(shadowControl)shadowControl.hidden=true;
     if(movingButton)movingButton.hidden=true;
+    distanceSetting.hidden=true;
     select(current);
   }
   function prepare(){
@@ -3853,23 +3913,25 @@
     };
   }
   const keys={KeyW:'forward',KeyS:'back',KeyA:'strafeLeft',KeyD:'strafeRight',
-              ArrowUp:'forward',ArrowDown:'back',ArrowLeft:'left',ArrowRight:'right'};
+              ArrowUp:'forward',ArrowDown:'back',ArrowLeft:'strafeLeft',ArrowRight:'strafeRight',
+              KeyQ:'left',KeyE:'right'};
   dialog.addEventListener('keydown',e=>{
     if(settings.contains(e.target))return;
+    if(!walkPanel.inert)fastWalk=e.shiftKey;
     const action=keys[e.code];
-    if(walkPanel.inert){if(action)e.preventDefault();return}
-    fastWalk=e.shiftKey;
-    if(!action || viewer.open || view.hidden || e.altKey || e.metaKey || e.ctrlKey)return;
-    e.preventDefault();held.add(action);
+    const browserShortcut=e.altKey || e.metaKey || (e.ctrlKey && !e.code.startsWith('Arrow'));
+    if(!action || viewer.open || view.hidden || browserShortcut)return;
+    e.preventDefault();
+    if(!walkPanel.inert)held.set(e.code,action);
   });
-  window.addEventListener('keyup',e=>{fastWalk=e.shiftKey;if(keys[e.code])held.delete(keys[e.code])});
+  window.addEventListener('keyup',e=>{fastWalk=e.shiftKey;held.delete(e.code)});
   document.querySelectorAll('[data-walk]').forEach(button=>{
     const action=button.dataset.walk;
     button.addEventListener('pointerdown',e=>{
       if(walkPanel.inert || e.button!==0)return;
-      held.add(action);button.setPointerCapture(e.pointerId);
+      held.set(e.pointerId,action);button.setPointerCapture(e.pointerId);
     });
-    button.addEventListener('lostpointercapture',()=>held.delete(action));
+    button.addEventListener('lostpointercapture',e=>held.delete(e.pointerId));
     button.addEventListener('click',e=>{if(e.detail===0 && garden)garden.step(action)});
   });
   window.addEventListener('blur',()=>{held.clear();fastWalk=false});
@@ -3879,7 +3941,7 @@
     else if(dialog.open){startFrames();playMusic();startAmbience()}
   });
   if(matchMedia('(pointer:coarse)').matches){
-    document.querySelector('#garden-directions').textContent='Hold arrows to walk · Drag to look';
+    document.querySelector('#garden-directions').textContent='Hold a button to move or turn · Drag to look';
   }
   audioLabel();
   if(location.hash==='#memorial')enter();

@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#171e1a" media="(prefers-color-scheme: dark)">
 <title>The Lead Programmer’s Chair</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=naturally">
+<link rel="stylesheet" href="style.css?v=view-distance">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
 <script defer src="memorial.js?v=photo-captions"></script>
@@ -20,7 +20,7 @@
 <script defer src="river-audio.js?v=independent-ambience"></script>
 <script defer src="river-gi.js?v=bridge-joins"></script>
 <script defer src="river-shadows.js?v=shadow-crossfade"></script>
-<script defer src="garden.js?v=combined-camera-input"></script>
+<script defer src="garden.js?v=warmed-distance-test"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -75,6 +75,11 @@
           <option value="3" selected>Lanterns + moon</option>
         </select>
         <button id="garden-moving-shadows" class="garden-pill" aria-label="Ray-traced moving lantern shadows" aria-pressed="false" hidden>Moving shadows off</button>
+        <div class="garden-view-distance garden-pill" hidden>
+          <label for="garden-distance">View distance</label>
+          <output for="garden-distance" aria-hidden="true">280</output>
+          <input id="garden-distance" type="range" min="160" max="280" step="20" value="280">
+        </div>
         <p class="garden-music-credit">
           Music track: Naturally by Pufino<br>
           Source: <a href="https://freetouse.com/music" target="_blank" rel="noopener">freetouse.com/music</a><br>
@@ -95,7 +100,7 @@
     </div>
     <div class="garden-movement">
       <button class="garden-pill" id="garden-guide" aria-pressed="false">Follow the river</button>
-      <p id="garden-directions">WASD to walk · Hold Shift to move faster · Drag to look</p>
+      <p id="garden-directions">WASD or arrows to walk · Shift to move faster · Drag or Q/E to look</p>
       <div class="walk-pad" aria-label="Walking controls">
         <button data-walk="left" aria-label="Turn left">↶</button>
         <button data-walk="forward" aria-label="Walk forward">↑</button>
