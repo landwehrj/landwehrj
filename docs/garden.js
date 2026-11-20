@@ -2,6 +2,9 @@
   const dialog = document.querySelector('#memorial');
   const view = dialog.querySelector('.garden-view');
   const fallback = dialog.querySelector('.garden-fallback');
+  const loadingView=dialog.querySelector('.garden-loading');
+  const loadingStatus=dialog.querySelector('#garden-loading-status');
+  const fpsLabel=dialog.querySelector('#garden-fps');
   const movement = dialog.querySelector('.garden-movement');
   const walkPanel = dialog.querySelector('.garden-bottom');
   const music = document.querySelector('#garden-music');
@@ -9,6 +12,7 @@
   const giButton = document.querySelector('#garden-gi');
   const shadowControl = document.querySelector('#garden-shadows');
   const movingButton = document.querySelector('#garden-moving-shadows');
+  const graphicsKey='lantern-river.graphics.v1';
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -19,10 +23,44 @@
   const guide = document.querySelector('#garden-guide');
   const captionEl = document.querySelector('#garden-caption');
   const locationEl = document.querySelector('#garden-count');
-  let current = 0, garden, preparing, frame = 0, previousTime = 0;
+  let current = 0, garden, preparing, opening, frame = 0, previousTime = 0;
+  let fpsFrom=0,fpsFrames=0;
+  let visibilityRevision=0;
   let desiredMusic = true, audioAttempt = 0, entrance;
   const held = new Set();
   let fastWalk=false;
+
+  function savedGraphics(){
+    try{
+      const settings=JSON.parse(localStorage.getItem(graphicsKey));
+      if(Number.isInteger(settings?.shadows) && settings.shadows>=0 && settings.shadows<=3
+        && typeof settings.moving==='boolean' && typeof settings.gi==='boolean')return settings;
+    }catch{}
+    return null;
+  }
+  function saveGraphics(settings){
+    try{localStorage.setItem(graphicsKey,JSON.stringify(settings));}catch{}
+  }
+  function setLoading(loading){
+    loadingView.hidden=!loading;
+    dialog.setAttribute('aria-busy',String(loading));
+    view.inert=walkPanel.inert=loading;
+    dialog.querySelector('.garden-audio').inert=loading;
+  }
+  function nextGardenFrame(signal){
+    return new Promise((resolve,reject)=>{
+      signal.throwIfAborted();
+      const id=requestAnimationFrame(time=>{
+        signal.removeEventListener('abort',cancel);
+        resolve(time);
+      });
+      function cancel(){
+        cancelAnimationFrame(id);
+        reject(signal.reason);
+      }
+      signal.addEventListener('abort',cancel,{once:true});
+    });
+  }
 
   function select(index) {
     current = (index + order.length) % order.length;
@@ -83,7 +121,7 @@
   // Direct links have no entry click to unlock audio. The first walking or
   // viewing gesture can start the river without starting the music.
   function activateOnInteraction(e){
-    if(e.target.closest('#garden-ambience, #garden-gi, #garden-shadows, #garden-moving-shadows, #leave-garden') || e.key==='Escape')return;
+    if(opening || e.target.closest('#garden-ambience, #garden-gi, #garden-shadows, #garden-moving-shadows, #leave-garden') || e.key==='Escape')return;
     if(!ambience.playing)startAmbience();
   }
   dialog.addEventListener('pointerup',activateOnInteraction);
@@ -94,7 +132,7 @@
   function playMusic() {
     const attempt = ++audioAttempt;
     if (!desiredMusic || !dialog.open || document.hidden) return;
-    music.play().catch(() => {
+    return music.play().catch(() => {
       if (attempt === audioAttempt) audioLabel();
     });
   }
@@ -506,11 +544,7 @@
     }
 
     let ready=false;
-    const atlasMap=new T.TextureLoader().load(atlas.image,()=>{
-      if(ready)draw();
-    },undefined,()=>{
-      if(ready)showFallback(new Error('The photo atlas could not be decoded'));
-    });
+    const atlasMap=photoMaterials.atlasMap;
     photoUniforms.photograph.value=atlasMap;
     atlasMap.encoding=T.sRGBEncoding;atlasMap.anisotropy=Math.min(8,renderer.capabilities.getMaxAnisotropy());
     const photoMat=new T.MeshStandardMaterial({
@@ -2741,8 +2775,8 @@
     const rod=new T.Object3D(),capCenter=new T.Vector3(),rodVector=new T.Vector3();
     const rodUp=new T.Vector3(0,1,0);
     const support=new T.Object3D(),localPart=new T.Object3D(),partMatrix=new T.Matrix4();
-    function updateLanterns(time){
-      nightTime.value=reduced.matches?0:time;
+    function updateLanterns(time,benchmark=false){
+      nightTime.value=reduced.matches && !benchmark?0:time;
       const t=nightTime.value;
       const breeze=shore.lanternDrift;
       bankLanterns.forEach(({x,y,z,size,phase,speed},i)=>{
@@ -2800,12 +2834,10 @@
       collars.instanceMatrix.needsUpdate=true;
     }
 
-    if(location.protocol!=='file:'){
-      new T.TextureLoader().load('photos/01.webp',texture=>{
-        texture.encoding=T.sRGBEncoding;
-        photoUniforms.photograph.value=texture;
-        photoUniforms.photoRegion.value.set(0,0,1,1);
-      });
+    if(photoMaterials.finalePhoto){
+      photoMaterials.finalePhoto.encoding=T.sRGBEncoding;
+      photoUniforms.photograph.value=photoMaterials.finalePhoto;
+      photoUniforms.photoRegion.value.set(0,0,1,1);
     }
     const lights=riverPortrait.lights;
     const formation=new T.Group();formation.visible=false;scene.add(formation);
@@ -2987,7 +3019,7 @@
       return shadowTextures.get(file);
     }
     let shadowSelection=0;
-    async function changeShadows(){
+    async function changeShadows(redraw=true){
       const selection=++shadowSelection,mode=Number(shadowControl.value);
       shadowControl.setAttribute('aria-busy',String(mode>0));
       try{
@@ -3011,13 +3043,16 @@
       }finally{
         if(selection===shadowSelection){
           shadowControl.removeAttribute('aria-busy');
-          if(dialog.open && !view.hidden)draw();
+          if(redraw && dialog.open && !view.hidden)draw();
         }
       }
     }
     if(shadowValues){
       shadowControl.hidden=false;
-      shadowControl.addEventListener('change',changeShadows);
+      shadowControl.addEventListener('change',async ()=>{
+        await changeShadows();
+        saveGraphics(graphicsSettings());
+      });
     }
     function setMovingActive(active){
       if(active===movingActive)return;
@@ -3033,8 +3068,9 @@
       movingButton.setAttribute('aria-pressed','false');
       movingButton.disabled=true;
     }
-    function toggleMovingShadows(){
-      if(!movingEnabled && !movingEffect){
+    async function setMovingShadows(enabled,redraw=true){
+      if(!movingLanterns.length || movingButton.disabled || enabled===movingEnabled)return;
+      if(enabled && !movingEffect){
         try{
           const matrices=architectureBoxes().map(box=>box.matrix);
           movingEffect=riverShadows.createMoving(T,renderer,movingValues,matrices,screenMaterial,drawPass);
@@ -3043,19 +3079,21 @@
           return;
         }
       }
-      movingEnabled=!movingEnabled;
+      movingEnabled=enabled;
       movingButton.setAttribute('aria-pressed',String(movingEnabled));
       movingButton.textContent='Moving shadows'+(movingEnabled?' on':' off');
       if(movingEnabled)setMovingActive(true);
-      updateLanterns(nightTime.value);
-      if(dialog.open && !view.hidden)draw();
+      if(redraw && dialog.open && !view.hidden)draw();
     }
     if(movingLanterns.length){
       movingButton.hidden=false;
-      movingButton.addEventListener('click',toggleMovingShadows);
+      movingButton.addEventListener('click',async ()=>{
+        await setMovingShadows(!movingEnabled);
+        saveGraphics(graphicsSettings());
+      });
     }
-    function toggleGI(){
-      const enabled=!giUniforms.riverGIEnabled.value;
+    function setGI(enabled,redraw=true){
+      if(!supportsGI || giButton.hidden || enabled===giUniforms.riverGIEnabled.value)return;
       if(enabled && !giEffect){
         try{
           giEffect=riverGI.create(T,renderer,architectureBoxes(),fixtures,giUniforms,screenMaterial,drawPass);
@@ -3069,11 +3107,14 @@
       giUniforms.riverGIEnabled.value=enabled;
       giButton.setAttribute('aria-pressed',String(enabled));
       giButton.textContent=enabled?'RTGI on':'RTGI off';
-      draw();
+      if(redraw)draw();
     }
     if(supportsGI){
       giButton.hidden=false;
-      giButton.addEventListener('click',toggleGI);
+      giButton.addEventListener('click',()=>{
+        setGI(!giUniforms.riverGIEnabled.value);
+        saveGraphics(graphicsSettings());
+      });
     }
     function drawWithBloom(){
       lightHeight.value=film.height;
@@ -3089,6 +3130,7 @@
       drawPass(combine,null);
     }
     function draw(){
+      if(!ready)return;
       if(giUniforms?.riverGIEnabled.value)giEffect.update(nightTime.value);
       if(movingActive){
         const nearby=movingEnabled?movingLanterns.map(lamp=>{
@@ -3120,7 +3162,7 @@
       renderer.clippingPlanes=[];
       drawWithBloom();
     }
-    function resize(){
+    function resize(redraw=true){
       const w=view.clientWidth,h=view.clientHeight;
       if(!w||!h)return;
       poolView.fov=Math.min(27,48*w/h);
@@ -3136,9 +3178,130 @@
       const scale=Math.min(.75,1440/w);
       reflection.setSize(Math.max(1,Math.round(w*scale)),Math.max(1,Math.round(h*scale)));
       reflectionPixel.set(1/reflection.width,1/reflection.height);
-      camera.aspect=w/h;camera.updateProjectionMatrix();draw();
+      camera.aspect=w/h;camera.updateProjectionMatrix();
+      if(redraw)draw();
     }
-    new ResizeObserver(resize).observe(view);
+    new ResizeObserver(()=>resize(!opening)).observe(view);
+    function graphicsSettings(){
+      return {shadows:shadowValues?.riverShadowMode.value ?? 0,moving:movingEnabled,gi:Boolean(giUniforms?.riverGIEnabled.value)};
+    }
+    async function applyStartupGraphics(settings){
+      if(shadowValues){
+        shadowControl.value=String(settings.shadows);
+        await changeShadows(false);
+      }
+      await setMovingShadows(settings.moving,false);
+      setGI(settings.gi,false);
+    }
+    async function waitForGraphicsFrame(signal){
+      // Frames queued behind the loading screen have to finish on the GPU.
+      const fence=renderer.capabilities.isWebGL2?gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE,0):null;
+      if(!fence){
+        gl.finish();
+        return nextGardenFrame(signal);
+      }
+      gl.flush();
+      try{
+        for(;;){
+          const now=await nextGardenFrame(signal);
+          const status=gl.clientWaitSync(fence,0,0);
+          if(status===gl.ALREADY_SIGNALED || status===gl.CONDITION_SATISFIED)return now;
+          if(status===gl.WAIT_FAILED){
+            gl.finish();
+            return nextGardenFrame(signal);
+          }
+        }
+      }finally{gl.deleteSync(fence);}
+    }
+    async function measureGraphics(signal,duration=1050){
+      let start=await nextGardenFrame(signal),previous=start;
+      let revision=visibilityRevision;
+      const frames=[];
+      do{
+        updateLanterns(12+(previous-start)*.001,true);
+        updateRowboat(nightTime.value);
+        draw();
+        const now=await waitForGraphicsFrame(signal);
+        if(revision!==visibilityRevision){
+          revision=visibilityRevision;
+          start=previous=now;
+          frames.length=0;
+          continue;
+        }
+        if(previous-start>=350 && now>previous)frames.push(now-previous);
+        previous=now;
+      }while(previous-start<duration || !frames.length);
+      frames.sort((a,b)=>a-b);
+      return {mean:frames.reduce((sum,frame)=>sum+frame,0)/frames.length,
+        slow:frames[Math.floor((frames.length-1)*.9)],worst:frames[frames.length-1]};
+    }
+    let graphicsSetup,graphicsReady=false;
+    async function configureStartupGraphics(signal){
+      const stored=savedGraphics();
+      loadingStatus.textContent='Loading shadows…';
+      await applyStartupGraphics(stored || {shadows:3,moving:false,gi:false});
+      signal.throwIfAborted();
+      if(stored || (!shadowValues && !movingLanterns.length))return;
+
+      loadingStatus.textContent='Testing graphics…';
+      const room=rooms[1],next=rooms[2];
+      camera.position.set(room.x,1.62,room.z-2.15);
+      camera.lookAt(next.x-.8,1.45,next.z);
+      const baseline=await measureGraphics(signal);
+      const smooth=sample=>sample.mean<=20 && sample.slow<=25;
+      if(smooth(baseline)){
+        let reference=baseline;
+        if(movingLanterns.length){
+          await setMovingShadows(true,false);
+          signal.throwIfAborted();
+          if(movingEnabled){
+            const moving=await measureGraphics(signal);
+            if(smooth(moving))reference=moving;
+            else{
+              await setMovingShadows(false,false);
+              setMovingActive(false);
+            }
+          }
+        }
+        if(supportsGI && !giButton.hidden){
+          loadingStatus.textContent='Testing RTGI…';
+          setGI(true,false);
+          if(giUniforms.riverGIEnabled.value){
+            // Include several probe refreshes, since a high average can hide
+            // hitches on the frames that update the lighting cache.
+            const gi=await measureGraphics(signal,1600);
+            const limit=T.MathUtils.clamp(reference.worst*1.2,32,44);
+            if(!smooth(gi) || gi.worst>limit)setGI(false,false);
+          }
+        }
+      }else if(baseline.mean>26 && baseline.mean<160 && shadowValues?.riverShadowMode.value===3){
+        shadowControl.value='1';
+        await changeShadows(false);
+        signal.throwIfAborted();
+        if(shadowValues.riverShadowMode.value===1){
+          const baked=await measureGraphics(signal);
+          if(baked.mean>baseline.mean*.88){
+            shadowControl.value='3';
+            await changeShadows(false);
+          }
+        }
+      }
+      signal.throwIfAborted();
+      if(!movingEnabled)setMovingActive(false);
+      saveGraphics(graphicsSettings());
+    }
+    async function initialiseGraphics(signal){
+      if(graphicsSetup){
+        try{await graphicsSetup}catch(error){if(error.name!=='AbortError')throw error;}
+      }
+      signal.throwIfAborted();
+      if(graphicsReady)return;
+      graphicsSetup=configureStartupGraphics(signal);
+      try{
+        await graphicsSetup;
+        graphicsReady=true;
+      }finally{graphicsSetup=null;}
+    }
     function shortest(a){return Math.atan2(Math.sin(a),Math.cos(a))}
     let guidePoints=[],guideHeading=0,arrival=null;
     let untilStep=.52;
@@ -3208,7 +3371,7 @@
       if(d<.07)setGuide(guideTarget+1<guidePoints.length?guideTarget+1:-1);
     }
     function go(index,reset=false){
-      if(reset){arrival=null;walkPanel.inert=false;elapsed=-1;showFinale(-1)}
+      if(reset){arrival=null;walkPanel.inert=Boolean(opening);elapsed=-1;showFinale(-1)}
       if(arrival)return;
       untilStep=.52;lastLocation=null;
       if(index===finalIndex && elapsed<0){
@@ -3333,29 +3496,54 @@
     });
     canvas.addEventListener('lostpointercapture',()=>drag=null);
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();showFallback()});
-    updateRowboat(0);resize();updateLanterns(0);go(current,true);
+    updateRowboat(0);updateLanterns(0);resize(false);
     ready=true;
-    if(shadowValues)void changeShadows();
     return {go,update,resize,step(action){
       if(arrival)return;
       setGuide(-1);move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
+    },initialiseGraphics,resetScene(){
+      updateLanterns(0);updateRowboat(nightTime.value);go(0,true);
     }};
   }
 
   function stopFrames(){
     held.clear();fastWalk=false;cancelAnimationFrame(frame);frame=0;previousTime=0;
+    resetFPS();
+  }
+  function resetFPS(){
+    fpsFrom=fpsFrames=0;
+    fpsLabel.hidden=true;
+  }
+  function countFPS(now){
+    if(!fpsFrom){
+      fpsFrom=now;
+      return;
+    }
+    fpsFrames++;
+    const duration=now-fpsFrom;
+    if(duration<650)return;
+    const fps=fpsFrames*1000/duration;
+    fpsLabel.textContent=(fps>=10?Math.round(fps):fps>=.1?fps.toFixed(1):'<0.1')+' FPS';
+    fpsLabel.hidden=false;
+    fpsFrom=now;
+    fpsFrames=0;
   }
   function animate(now){
     frame=0;
     if(!dialog.open || document.hidden || !garden || !fallback.hidden)return;
-    if(!viewer.open)garden.update(previousTime?(now-previousTime)/1000:0,now/1000);
+    if(!viewer.open){
+      garden.update(previousTime?(now-previousTime)/1000:0,now/1000);
+      countFPS(now);
+    }else if(fpsFrom)resetFPS();
     previousTime=now;frame=requestAnimationFrame(animate);
   }
   function startFrames(){
-    if(!frame && garden && dialog.open && !document.hidden && fallback.hidden)frame=requestAnimationFrame(animate);
+    if(!frame && !opening && garden && dialog.open && !document.hidden && fallback.hidden)frame=requestAnimationFrame(animate);
   }
   function showFallback(error){
     if(error)console.warn('The 3D memorial could not start:',error);
+    opening?.abort();
+    setLoading(false);
     stopFrames();walkPanel.inert=false;fallback.hidden=false;movement.hidden=true;view.hidden=true;
     if(giButton)giButton.hidden=true;
     if(shadowControl)shadowControl.hidden=true;
@@ -3364,37 +3552,68 @@
   }
   function prepare(){
     if(preparing)return preparing;
-      const atlasRequest=new Promise((resolve,reject)=>{
+    const textureLoader=new THREE.TextureLoader();
+    const atlasRequest=new Promise((resolve,reject)=>{
       const script=document.createElement('script');
       script.src='garden-atlas.js';
       script.onload=()=>resolve(gardenAtlas);
       script.onerror=()=>reject(new Error('Offline photo atlas unavailable'));
       document.head.appendChild(script);
-      });
-      const textureLoader=new THREE.TextureLoader();
-      // Poly Haven CC0. The finish maps pack height, roughness and grain.
-      const woodRequest=textureLoader.loadAsync('materials/wood-finish.webp?v=2').catch(()=>null);
-      const slateRequest=textureLoader.loadAsync('materials/slate-finish.webp').catch(()=>null);
-      const deckRequest=textureLoader.loadAsync('materials/deck-color.webp').catch(()=>null);
-      const foliageRequest=textureLoader.loadAsync('materials/river-foliage.webp').catch(()=>null);
-      const stoneRequest=textureLoader.loadAsync('materials/river-painted-slate.webp').catch(()=>null);
-      const forestFloorRequest=textureLoader.loadAsync('materials/river-forest-floor.webp').catch(()=>null);
-      const timberRequest=textureLoader.loadAsync('materials/pavilion-timber.webp').catch(()=>null);
-      preparing=Promise.all([atlasRequest,woodRequest,slateRequest,deckRequest,foliageRequest,stoneRequest,forestFloorRequest,timberRequest])
-        .then(([atlas,wood,slate,deck,foliage,paintedStone,forestFloor,pavilionTimber])=>{
-          garden=makeGarden(atlas,{wood,slate,deck,foliage,paintedStone,forestFloor,pavilionTimber});
-          startFrames();
-        }).catch(showFallback);
+    }).then(async atlas=>({atlas,atlasMap:await textureLoader.loadAsync(atlas.image)}));
+    // Poly Haven CC0. The finish maps pack height, roughness and grain.
+    const optionalTexture=src=>textureLoader.loadAsync(src).catch(()=>null);
+    preparing=Promise.all([
+      atlasRequest,
+      location.protocol==='file:'?null:optionalTexture('photos/01.webp'),
+      optionalTexture('materials/wood-finish.webp?v=2'),
+      optionalTexture('materials/slate-finish.webp'),
+      optionalTexture('materials/deck-color.webp'),
+      optionalTexture('materials/river-foliage.webp'),
+      optionalTexture('materials/river-painted-slate.webp'),
+      optionalTexture('materials/river-forest-floor.webp'),
+      optionalTexture('materials/pavilion-timber.webp')
+    ]).then(([{atlas,atlasMap},finalePhoto,wood,slate,deck,foliage,paintedStone,forestFloor,pavilionTimber])=>{
+      loadingStatus.textContent='Preparing the river…';
+      garden=makeGarden(atlas,{atlasMap,finalePhoto,wood,slate,deck,foliage,paintedStone,forestFloor,pavilionTimber});
+      return garden;
+    });
     return preparing;
   }
-  function enter(userGesture){
+  async function enter(userGesture){
     if(dialog.open)return;
+    opening?.abort();
+    const session=new AbortController(),{signal}=session;
+    opening=session;
+    loadingStatus.textContent='Loading the memorial…';
+    setLoading(true);
     dialog.showModal();
     select(0);
-    if(userGesture){playMusic();startAmbience()}
-    if(garden){garden.resize();garden.go(0,true);startFrames()}
-    else prepare();
-    if(!view.hidden)view.focus({preventScroll:true});
+    const musicStarting=userGesture?playMusic():null;
+    if(userGesture)startAmbience();
+    const soundReady=musicStarting && Promise.race([musicStarting,new Promise(resolve=>setTimeout(resolve,1600))]);
+    try{
+      // Give the loading screen a paint before building or drawing the scene.
+      await nextGardenFrame(signal);
+      await nextGardenFrame(signal);
+      const instance=await prepare();
+      signal.throwIfAborted();
+      instance.resize(false);
+      await instance.initialiseGraphics(signal);
+      signal.throwIfAborted();
+      loadingStatus.textContent='Opening the memorial…';
+      instance.resetScene();
+      await soundReady;
+      await nextGardenFrame(signal);
+      setLoading(false);
+      view.focus({preventScroll:true});
+    }catch(error){
+      if(!signal.aborted)showFallback(error);
+    }finally{
+      if(opening===session){
+        opening=null;
+        startFrames();
+      }
+    }
   }
   function leave(){
     if(history.state?.lanternGarden) history.back();
@@ -3411,7 +3630,10 @@
   }));
   dialog.addEventListener('cancel',e=>{e.preventDefault();leave()});
   dialog.addEventListener('close',()=>{
-    stopFrames();walkPanel.inert=false;pauseMusic();music.currentTime=0;
+    if(dialog.open)return;
+    opening?.abort();opening=null;
+    setLoading(false);
+    stopFrames();pauseMusic();music.currentTime=0;
     ambienceActivated=false;ambience.pause();
     entrance?.focus({preventScroll:true});
   });
@@ -3448,6 +3670,7 @@
   });
   window.addEventListener('blur',()=>{held.clear();fastWalk=false});
   document.addEventListener('visibilitychange',()=>{
+    visibilityRevision++;
     if(document.hidden){stopFrames();pauseMusic();ambience.pause()}
     else if(dialog.open){startFrames();playMusic();if(ambienceActivated)startAmbience()}
   });
