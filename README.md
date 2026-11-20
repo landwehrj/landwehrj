@@ -4,6 +4,8 @@
 
 # In memory of the best pair programmer of 20 years:
 
+[Visit The Lantern River](https://landwehrj.github.io/landwehrj/) for a virtual memorial walk through her photos and memories.
+
 <img width="1803" height="1352" alt="IMG_9522" src="https://github.com/user-attachments/assets/725cbf2e-dd1b-4ce8-a5e8-5ec7293580cb" />
 <img width="2284" height="1286" alt="image" src="https://github.com/user-attachments/assets/bdd6daed-6b4a-4f34-92e8-cf21a5ce1ed6" />
 <img width="1803" height="1352" alt="image" src="https://github.com/user-attachments/assets/0832fd07-74da-4748-b48b-b805bcec2b29" />
