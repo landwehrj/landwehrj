@@ -1,8 +1,14 @@
 const riverShadows=(() => {
   const reach=5.8,faceSize=192,bakeSize=224,textureWidth=256;
   const margin=2.4,moonStart=12,moonRange=24;
-  const movingSize=512,movingRange=4.8,movingSpread=1.3;
+  const movingSize=512,movingDetailSize=2*movingSize,movingRange=4.8,movingSpread=1.3;
+  const detailSpreadX=.83,detailSpreadY=.70;
   const movingActiveLimit=2,movingLimit=movingActiveLimit+1;
+  const movingDisk=Array.from({length:6},(_,i)=>{
+    const angle=i*2.39996323+.37,radius=Math.sqrt((i+.5)/6);
+    const point=`vec2(${(radius*Math.cos(angle)).toFixed(6)},${(radius*Math.sin(angle)).toFixed(6)})`;
+    return `${point},-${point}`;
+  }).join(',');
 
   function uniforms(T,rooms,lamps,moon){
     return {
@@ -23,6 +29,10 @@ const riverShadows=(() => {
       movingLampColor:{value:tint},movingLampPower:{value:new Float32Array(movingLimit)},
       movingLamp:{value:vectors()},movingShadowOrigin:{value:vectors()},
       movingShadowAxis:{value:vectors()},movingShadowAcross:{value:vectors()},movingShadowUp:{value:vectors()},
+      movingShadowTile:{value:vectors()},movingShadowPixel:{value:new T.Vector2()},
+      movingShadowWideTile:{value:vectors()},
+      movingShadowRefined:{value:false},
+      movingShadowFocused:{value:false},
       movingShadowDepth:{value:null}
     };
   }
@@ -170,25 +180,74 @@ const riverShadows=(() => {
       uniform vec3 movingShadowOrigin[RIVER_MOVING_LIGHTS],movingShadowAxis[RIVER_MOVING_LIGHTS];
       uniform vec3 movingShadowAcross[RIVER_MOVING_LIGHTS],movingShadowUp[RIVER_MOVING_LIGHTS];
       uniform float movingLampPower[RIVER_MOVING_LIGHTS];
+      uniform vec3 movingShadowTile[RIVER_MOVING_LIGHTS];
+      uniform vec3 movingShadowWideTile[RIVER_MOVING_LIGHTS];
+      uniform bool movingShadowRefined;
+      uniform bool movingShadowFocused;
+      uniform vec2 movingShadowPixel;
       uniform sampler2D movingShadowDepth;
 
-      float movingDepth(vec2 uv,int light){
-        vec2 tile=clamp(uv,vec2(.5/${movingSize}.),vec2(1.-.5/${movingSize}.));
-        tile.x=(tile.x+float(light))/${movingLimit}.;
-        return dot(texture2D(movingShadowDepth,tile).rg,vec2(4080.,15.))*${movingRange}/4095.;
+      float movingDepth(vec2 texel,vec3 tile){
+        vec2 uv=(tile.xy+clamp(texel,vec2(.5),vec2(tile.z-.5)))*movingShadowPixel;
+        return dot(texture2D(movingShadowDepth,uv).rg,vec2(4080.,15.))*${movingRange}/4095.;
       }
-      float movingShadow(vec3 surface,vec3 normal,int light){
-        vec3 direction=movingShadowAxis[light],across=movingShadowAcross[light],up=movingShadowUp[light];
-        vec3 delta=surface+normal*.029-movingShadowOrigin[light];
-        float forward=dot(delta,direction);
-        vec2 tile=vec2(dot(delta,across),dot(delta,up))
-                       /max(2.*${movingSpread}*forward,.001)+.5;
-        float facing=dot(delta,normal);
-        vec3 plane=vec3(dot(normal,across),dot(normal,up),dot(normal,direction));
-        vec2 grid=tile*${movingSize}.-.5;
+      float movingReceiverDepth(vec2 texel,float size,vec2 extent,vec3 plane,float facing,float forward){
+        vec2 cone=(texel/size*2.-1.)*extent;
+        // The map stores axial depth, so compare on the same receiver plane.
+        float slope=dot(cone,plane.xy)+plane.z;
+        return abs(slope)>.045 && slope*facing>0.?facing/slope:forward;
+      }
+      float movingComparison(vec2 texel,vec3 mapTile,vec2 extent,vec3 plane,float facing,float forward,float biasScale){
+        float expected=movingReceiverDepth(texel,mapTile.z,extent,plane,facing,forward);
+        return smoothstep(expected-.041*biasScale,expected-.011*biasScale,movingDepth(texel,mapTile));
+      }
+      float movingBilinear(vec2 grid,vec3 mapTile,vec2 extent,vec3 plane,float facing,float forward,float biasScale){
+        vec2 corner=floor(grid)+.5,f=fract(grid);
+        float a=movingComparison(corner,mapTile,extent,plane,facing,forward,biasScale);
+        float b=movingComparison(corner+vec2(1.,0.),mapTile,extent,plane,facing,forward,biasScale);
+        float c=movingComparison(corner+vec2(0.,1.),mapTile,extent,plane,facing,forward,biasScale);
+        float d=movingComparison(corner+vec2(1.,1.),mapTile,extent,plane,facing,forward,biasScale);
+        return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+      }
+      const vec2 detailExtent=vec2(${detailSpreadX},${detailSpreadY});
+      const vec2 wideExtent=vec2(${movingSpread});
+      const vec2 movingDisk[12]=vec2[12](${movingDisk});
+      vec2 movingGrid(vec2 cone,vec2 extent,float size){
+        return (cone/(2.*extent)+.5)*size-.5;
+      }
+      float movingAngularRadius(vec2 cone,vec3 wideTile,vec3 plane,float facing,float forward){
+        // Both maps share a blocker search in the full beam and the same filter radius in light space.
+        vec2 grid=movingGrid(cone,wideExtent,wideTile.z);
         vec2 base=floor(grid),fraction=fract(grid);
-        // A continuous kernel follows the receiver across texels and grows
-        // in world units with distance from the light.
+        float stride=wideTile.z/${movingSize}.;
+        float separation=0.,blockers=0.;
+        for(int y=-1;y<=1;y++){
+          for(int x=-1;x<=1;x++){
+            vec2 offset=vec2(float(x),float(y))*stride;
+            vec2 texel=base+offset+.5;
+            float expected=movingReceiverDepth(texel,wideTile.z,wideExtent,plane,facing,forward);
+            float gap=expected-movingDepth(texel,wideTile);
+            vec2 relative=(offset-fraction)/stride;
+            float weight=max(0.,1.-dot(relative,relative)/4.)*smoothstep(.027,.055,gap);
+            separation+=weight*gap;
+            blockers+=weight;
+          }
+        }
+        float softness=smoothstep(.07,.62,separation/max(blockers,.001))*smoothstep(0.,.45,blockers);
+        return mix(.95,2.5,softness)*2.*${movingSpread}/${movingSize}.;
+      }
+      float movingDiskShadow(vec2 cone,float radius,vec3 tile,vec2 extent,vec3 plane,float facing,float forward){
+        vec2 grid=movingGrid(cone,extent,tile.z);
+        vec2 texelRadius=radius*tile.z/(2.*extent);
+        float visibility=0.;
+        for(int i=0;i<12;i++){
+          visibility+=movingBilinear(grid+movingDisk[i]*texelRadius,tile,extent,plane,facing,forward,.5);
+        }
+        return visibility/12.;
+      }
+      float movingGridShadow(vec2 cone,vec3 mapTile,vec3 plane,float facing,float forward){
+        vec2 grid=movingGrid(cone,wideExtent,mapTile.z);
+        vec2 base=floor(grid),fraction=fract(grid);
         float radius=mix(1.8,2.9,smoothstep(.65,3.,forward));
         float visibility=0.,total=0.;
         for(int y=-2;y<=3;y++){
@@ -198,39 +257,124 @@ const riverShadows=(() => {
             float weight=max(0.,1.-dot(offset,offset)/(radius*radius));
             if(weight<=0.)continue;
             weight*=weight;
-            vec2 uv=(base+tap+.5)/${movingSize}.;
-            vec2 cone=(uv*2.-1.)*${movingSpread};
-            // The map stores axial depth, so compare on the same receiver plane.
-            float slope=dot(cone,plane.xy)+plane.z;
-            float expected=abs(slope)>.045 && slope*facing>0.?facing/slope:forward;
-            visibility+=weight*smoothstep(expected-.041,expected-.011,movingDepth(uv,light));
+            vec2 texel=base+tap+.5;
+            visibility+=weight*movingComparison(texel,mapTile,wideExtent,plane,facing,forward,1.);
             total+=weight;
           }
         }
         return visibility/total;
       }
+      float movingShadow(vec3 surface,vec3 normal,int light){
+        vec3 axis=movingShadowAxis[light],across=movingShadowAcross[light],up=movingShadowUp[light];
+        vec3 tile=movingShadowTile[light];
+        vec3 delta=surface-movingShadowOrigin[light];
+        float normalBias=.029;
+        if(movingShadowRefined){
+          float extent=movingShadowFocused?detailExtent.x:wideExtent.x;
+          float worldTexel=2.*extent*max(dot(delta,axis),.2)/${movingDetailSize}.;
+          float grazing=1.-clamp(dot(-normalize(delta),normal),0.,1.);
+          normalBias=clamp(worldTexel*mix(.55,1.2,grazing),.008,.022);
+        }
+        delta+=normal*normalBias;
+        float forward=dot(delta,axis),facing=dot(delta,normal);
+        vec2 cone=vec2(dot(delta,across),dot(delta,up))/max(forward,.001);
+        vec3 plane=vec3(dot(normal,across),dot(normal,up),dot(normal,axis));
+        if(!movingShadowRefined)return movingGridShadow(cone,tile,plane,facing,forward);
+
+        vec3 wideTile=movingShadowWideTile[light];
+        float radius=movingAngularRadius(cone,wideTile,plane,facing,forward);
+        if(!movingShadowFocused)return movingDiskShadow(cone,radius,wideTile,wideExtent,plane,facing,forward);
+        vec2 edge=abs(cone)/detailExtent;
+        float blend=tile.z>${movingSize}.?1.-smoothstep(.74,.96,max(edge.x,edge.y)):0.;
+        if(blend>=1.)return movingDiskShadow(cone,radius,tile,detailExtent,plane,facing,forward);
+        float wide=movingDiskShadow(cone,radius,wideTile,wideExtent,plane,facing,forward);
+        if(blend<=0.)return wide;
+        return mix(wide,movingDiskShadow(cone,radius,tile,detailExtent,plane,facing,forward),blend);
+      }
     `+shader.fragmentShader;
   }
 
-  function createMoving(T,renderer,values,matrices,screenMaterial,drawPass){
+  function rasterMovingPass(T,renderer,casters){
+    const geometryBatches=new Map();
+    for(const object of casters){
+      const {geometry}=object;
+      object.updateWorldMatrix(true,false);
+      if(!geometry.boundingBox)geometry.computeBoundingBox();
+      if(!geometryBatches.has(geometry))geometryBatches.set(geometry,[]);
+      const instances=geometryBatches.get(geometry);
+      for(let i=0;i<(object.isInstancedMesh?object.count:1);i++){
+        const matrix=new T.Matrix4();
+        if(object.isInstancedMesh)object.getMatrixAt(i,matrix);
+        matrix.premultiply(object.matrixWorld);
+        instances.push({matrix,bounds:geometry.boundingBox.clone().applyMatrix4(matrix)});
+      }
+    }
+    const scenes=new Map();
+    const camera=new T.PerspectiveCamera(T.MathUtils.radToDeg(2*Math.atan(movingSpread)),1,.01,movingRange);
+    const aim=new T.Vector3(),clearColor=new T.Color();
+    const material=new T.ShaderMaterial({
+      name:'Rasterized moving lantern depth',side:T.DoubleSide,toneMapped:false,
+      vertexShader:`varying vec3 lightPoint;
+        void main(){
+          vec4 point=modelViewMatrix*instanceMatrix*vec4(position,1.);
+          lightPoint=point.xyz;
+          gl_Position=projectionMatrix*point;
+        }`,
+      fragmentShader:cubeShader+`
+        varying vec3 lightPoint;
+        void main(){
+          float distanceToLight=length(lightPoint),depth=-lightPoint.z;
+          if(distanceToLight>=${movingRange} || depth<=distanceToLight*.55)discard;
+          gl_FragColor=vec4(shadowPack(depth/${movingRange}),0.,1.);
+        }`
+    });
+    return (center,origin,axis,across,up,target,focused=false)=>{
+      let scene=scenes.get(center);
+      if(!scene){
+        scene=new T.Scene();
+        for(const [geometry,instances] of geometryBatches){
+          const nearby=instances.filter(({bounds})=>bounds.distanceToPoint(center)<movingRange+1.7);
+          if(!nearby.length)continue;
+          const batch=new T.InstancedMesh(geometry,material,nearby.length);
+          nearby.forEach(({matrix},i)=>batch.setMatrixAt(i,matrix));
+          batch.frustumCulled=false;
+          scene.add(batch);
+        }
+        scenes.set(center,scene);
+      }
+      camera.projectionMatrix.elements[0]=1/(focused?detailSpreadX:movingSpread);
+      // The atlas' vertical axis points down from the lantern, opposite camera up.
+      camera.projectionMatrix.elements[5]=-1/(focused?detailSpreadY:movingSpread);
+      camera.projectionMatrixInverse.copy(camera.projectionMatrix).invert();
+      camera.position.copy(origin);
+      camera.up.copy(up).negate();
+      camera.lookAt(aim.copy(origin).add(axis));
+      const previous=renderer.getRenderTarget(),alpha=renderer.getClearAlpha();
+      renderer.getClearColor(clearColor);
+      try{
+        renderer.setRenderTarget(target);
+        renderer.setClearColor(0xffffff,1);
+        renderer.render(scene,camera);
+      }finally{
+        renderer.setClearColor(clearColor,alpha);
+        renderer.setRenderTarget(previous);
+      }
+    };
+  }
+
+  function tracedMovingPass(T,renderer,matrices,screenMaterial,drawPass,triangles){
     const unit=new T.Box3(new T.Vector3(-.5,-.5,-.5),new T.Vector3(.5,.5,.5));
     const bounds=new T.Box3();
     const trees=new Map();
-    const slots=Array.from({length:movingLimit},()=>({
-      lamp:null,time:-Infinity,power:0,fade:0,wanted:false
-    }));
-    const vertical=new T.Vector3(0,1,0);
-    if(movingSize*movingLimit>renderer.capabilities.maxTextureSize)throw Error('Moving shadow atlas exceeds GPU texture size');
-    const target=new T.WebGLRenderTarget(movingSize*movingLimit,movingSize,{
-      depthBuffer:false,minFilter:T.NearestFilter,magFilter:T.NearestFilter
-    });
-    target.scissorTest=true;
+    const geometryUniforms=triangles?{riverTriangleTree:{value:null}}:{
+      riverShadowTree:{value:null},riverShadowTreeHeight:{value:1},riverShadowNodeCount:{value:0}
+    };
     const trace={
-      riverShadowTree:{value:null},riverShadowTreeHeight:{value:1},riverShadowNodeCount:{value:0},
+      ...geometryUniforms,
       traceOrigin:{value:null},traceAxis:{value:null},traceAcross:{value:null},traceUp:{value:null},
       traceOffset:{value:0}
     };
-    const material=screenMaterial(trace,rayShader+cubeShader+`
+    const material=screenMaterial(trace,(triangles?triangles.shader:rayShader)+cubeShader+`
       uniform vec3 traceOrigin,traceAxis,traceAcross,traceUp;
       uniform float traceOffset;
       void main(){
@@ -245,7 +389,65 @@ const riverShadows=(() => {
         gl_FragColor=vec4(shadowPack(depth/${movingRange}),0.,1.);
       }
     `);
+    if(triangles)material.name='Moving triangle shadow atlas';
+    let checkedShader=!triangles;
+    return (center,origin,axis,across,up,target)=>{
+      const limit=renderer.capabilities.maxTextureSize;
+      if(triangles){
+        if(!trees.has(center))trees.set(center,triangles.build(center,movingRange+1.7,limit));
+        trace.riverTriangleTree.value=trees.get(center);
+      }else{
+        if(!trees.has(center)){
+          const solids=matrices.filter(matrix=>bounds.copy(unit).applyMatrix4(matrix).distanceToPoint(center)<movingRange+1.7);
+          trees.set(center,buildTree(T,solids,limit,center));
+        }
+        const {tree,height,count}=trees.get(center);
+        trace.riverShadowTree.value=tree;
+        trace.riverShadowTreeHeight.value=height;
+        trace.riverShadowNodeCount.value=count;
+      }
+      trace.traceOrigin.value=origin;
+      trace.traceAxis.value=axis;
+      trace.traceAcross.value=across;
+      trace.traceUp.value=up;
+      trace.traceOffset.value=target.viewport.x;
+      drawPass(material,target);
+      if(!checkedShader){
+        const program=renderer.info.programs[renderer.info.programs.length-1];
+        if(program?.diagnostics?.runnable===false)throw Error('The triangle shadow shader could not compile');
+        checkedShader=true;
+      }
+    };
+  }
+
+  function createMoving(T,renderer,values,matrices,screenMaterial,drawPass,triangles,rasterCasters,layout='standard'){
+    const vertical=new T.Vector3(0,1,0);
+    const textureLimit=renderer.capabilities.maxTextureSize;
+    const supportsWideAtlas=Boolean(rasterCasters) && 2*movingDetailSize<=textureLimit;
+    const hasDetail=layout==='focused' && supportsWideAtlas;
+    const fullBeam=layout==='full' && supportsWideAtlas;
+    const tileSize=fullBeam?movingDetailSize:movingSize;
+    const columns=fullBeam && movingLimit*tileSize>textureLimit?2:movingLimit;
+    const width=hasDetail?2*movingDetailSize:tileSize*columns;
+    const height=hasDetail?movingDetailSize:tileSize*Math.ceil(movingLimit/columns);
+    if(Math.max(width,height)>textureLimit)throw Error('Moving shadow atlas exceeds GPU texture size');
+    const detailTile=new T.Vector3(0,0,movingDetailSize);
+    const slots=Array.from({length:movingLimit},(_,i)=>({
+      lamp:null,time:-Infinity,power:0,fade:0,wanted:false,detail:false,
+      tile:hasDetail?new T.Vector3(movingDetailSize+(i%2)*movingSize,Math.floor(i/2)*movingSize,movingSize):
+        new T.Vector3((i%columns)*tileSize,Math.floor(i/columns)*tileSize,tileSize)
+    }));
+    const target=new T.WebGLRenderTarget(width,height,{
+      depthBuffer:Boolean(rasterCasters),minFilter:T.NearestFilter,magFilter:T.NearestFilter
+    });
+    target.scissorTest=true;
+    const renderTile=rasterCasters?rasterMovingPass(T,renderer,rasterCasters):
+      tracedMovingPass(T,renderer,matrices,screenMaterial,drawPass,triangles);
     values.movingShadowDepth.value=target.texture;
+    values.movingShadowPixel.value.set(1/width,1/height);
+    values.movingShadowRefined.value=hasDetail || fullBeam;
+    values.movingShadowFocused.value=hasDetail;
+    slots.forEach(({tile},i)=>values.movingShadowWideTile.value[i].copy(tile));
     let lastFrame=null,frameSpacing=1/60,nextUpdate=-Infinity;
     const positions=values.movingLamp.value,origins=values.movingShadowOrigin.value;
     const axes=values.movingShadowAxis.value,across=values.movingShadowAcross.value,up=values.movingShadowUp.value;
@@ -258,12 +460,18 @@ const riverShadows=(() => {
       // Small changes in camera distance should not trade two nearly equal lights.
       const wanted=nearby.map(light=>({...light,score:light.distance-(incumbent(light.lamp)?1.4:0)}))
         .sort((a,b)=>a.score-b.score).slice(0,movingActiveLimit);
+      let detailLamp=null,detailScore=0;
+      const currentDetail=slots.find(slot=>slot.detail)?.lamp;
+      if(hasDetail)for(const {lamp,footprint} of wanted){
+        const score=footprint*(lamp===currentDetail?1.25:1);
+        if(score>detailScore){detailScore=score;detailLamp=lamp;}
+      }
       for(const slot of slots){
         slot.wanted=wanted.some(({lamp})=>lamp===slot.lamp);
         if(slot.wanted && slot.time!==-Infinity)slot.fade=Math.min(1,slot.fade+fadeStep/.31);
         if(!slot.wanted){
           slot.fade=Math.max(0,slot.fade-fadeStep/.27);
-          if(slot.fade===0)slot.lamp=null;
+          if(slot.fade===0){slot.lamp=null;slot.detail=false;}
         }
       }
       for(const {lamp,power} of wanted){
@@ -283,34 +491,34 @@ const riverShadows=(() => {
       }
       // Warm a new tile first, then refresh the oldest tile whose light moved.
       let candidate=-1;
-      slots.forEach(({lamp,time:built,wanted},i)=>{
+      const detailOwner=slots.findIndex(slot=>slot.detail);
+      const useDetail=i=>slots[i].lamp===detailLamp && (detailOwner<0 || detailOwner===i);
+      slots.forEach(({lamp,time:built,wanted,detail},i)=>{
         if(!lamp)return;
         positions[i].copy(lamp.glow.position);
-        if(!wanted || (built!==-Infinity && positions[i].distanceToSquared(origins[i])<.000036))return;
+        if(!wanted || (built!==-Infinity && detail===useDetail(i) && positions[i].distanceToSquared(origins[i])<.000036))return;
         if(candidate<0 || built<slots[candidate].time)candidate=i;
       });
       // Keep work below one tile per frame and reduce the cadence on slower clients.
-      const interval=Math.max(1/32,frameSpacing*1.65);
+      const interval=Math.max(1/(triangles?28:32),frameSpacing*(triangles?2:1.65));
       if(candidate>=0 && (slots[candidate].time===-Infinity || time+.001>=nextUpdate)){
-        const i=candidate,center=slots[i].lamp.movingPath.center;
-        if(!trees.has(center)){
-          const solids=matrices.filter(matrix=>bounds.copy(unit).applyMatrix4(matrix).distanceToPoint(center)<movingRange+1.7);
-          trees.set(center,buildTree(T,solids,renderer.capabilities.maxTextureSize,center));
-        }
-        const {tree,height,count}=trees.get(center);
-        trace.riverShadowTree.value=tree;
-        trace.riverShadowTreeHeight.value=height;
-        trace.riverShadowNodeCount.value=count;
+        const i=candidate,slot=slots[i],center=slot.lamp.movingPath.center;
+        const detailed=useDetail(i),tile=detailed?detailTile:slot.tile;
         origins[i].copy(positions[i]);
-        trace.traceOrigin.value=origins[i];
-        trace.traceAxis.value=axes[i];
-        trace.traceAcross.value=across[i];
-        trace.traceUp.value=up[i];
-        trace.traceOffset.value=i*movingSize;
-        target.viewport.set(i*movingSize,0,movingSize,movingSize);
+        // Both projections use the same origin so shadows line up in their overlap.
+        const wide=slot.tile;
+        target.viewport.set(wide.x,wide.y,wide.z,wide.z);
         target.scissor.copy(target.viewport);
-        drawPass(material,target);
-        slots[i].time=time;
+        renderTile(center,origins[i],axes[i],across[i],up[i],target);
+        if(detailed){
+          target.viewport.set(tile.x,tile.y,tile.z,tile.z);
+          target.scissor.copy(target.viewport);
+          renderTile(center,origins[i],axes[i],across[i],up[i],target,true);
+        }
+        // Keep sampling the old tier until its replacement has been rendered.
+        values.movingShadowTile.value[i].copy(tile);
+        slot.detail=detailed;
+        slot.time=time;
         nextUpdate=Math.max(time+interval*.45,Math.min(time+interval,nextUpdate+interval));
       }
       slots.forEach((slot,i)=>{

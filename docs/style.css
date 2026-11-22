@@ -131,6 +131,8 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 @media(max-height:520px) and (min-width:651px){.garden-top{padding-top:8px}.garden-bottom{padding-bottom:calc(env(safe-area-inset-bottom) + 29px)}.garden-caption h3{font-size:20px}}
 .garden-movement[hidden]{display:none}
 .garden-thumbstick,#garden-wide{display:none}
+.garden-flight-pad{display:none}
+.garden-flight-pad button{touch-action:none;user-select:none}
 
 #garden-guide{margin-bottom:8px}
 .garden-actions [hidden],.fallback-reflection,.fallback-sky{display:none}
@@ -166,7 +168,8 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 .garden-shadow-choices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:4px;margin-top:4px}
 .garden-shadow-choices .garden-pill{padding:6px;font-size:12px;text-align:center}
 #memorial .garden-shadow-choices [aria-pressed="true"]{border-color:#cdb582;background:#263b44}
-#memorial :is(#garden-gi[aria-pressed="true"],#garden-moving-shadows[aria-pressed="true"],#garden-wide[aria-pressed="true"],#garden-settings-toggle[aria-expanded="true"]){border-color:#cdb582;background:#263b44}
+#memorial :is(#garden-gi[aria-pressed="true"],#garden-moving-shadows[aria-pressed="true"],#garden-wide[aria-pressed="true"],#garden-fly[aria-pressed="true"],#garden-settings-toggle[aria-expanded="true"]){border-color:#cdb582;background:#263b44}
+#memorial.garden-flying #garden-directions{display:block}
 @media(max-width:650px){.garden-top{grid-template-columns:auto minmax(0,1fr) auto}}
 
 @media(pointer:coarse){
@@ -183,6 +186,7 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
   .garden-movement #garden-guide{min-height:36px;margin:0}
   .garden-movement p{display:block;max-width:none;margin:0;font-size:11px}
   .garden-movement .walk-pad{display:none}
+  #memorial.garden-flying .garden-flight-pad{display:flex;gap:5px}
   .garden-thumbstick{grid-area:stick;align-self:end;display:grid;place-items:center;width:clamp(76px,calc(var(--garden-height) * .24),112px);aspect-ratio:1;touch-action:none;user-select:none;pointer-events:auto;border:1px solid #d9d1b272;border-radius:50%;background:#0b1d2a80;box-shadow:0 2px 9px #0005}
   .garden-thumbstick span{width:44%;aspect-ratio:1;border:1px solid #e7cda0a8;border-radius:50%;background:#496675bc;transform:translate(var(--stick-x,0px),var(--stick-y,0px));pointer-events:none}
   .garden-thumbstick[data-active] span{background:#7493a3de}

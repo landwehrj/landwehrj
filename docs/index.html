@@ -7,20 +7,20 @@
 <meta name="theme-color" content="#f7f5ed" media="(prefers-color-scheme: light)">
 <meta name="theme-color" content="#171e1a" media="(prefers-color-scheme: dark)">
 <title>The Lead Programmer’s Chair</title>
-<link rel="icon" href="data:,">
-<link rel="stylesheet" href="style.css?v=compact-mobile">
+<link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
+<link rel="stylesheet" href="style.css?v=river-flight">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
 <script defer src="memorial.js?v=photo-captions"></script>
 <script defer src="desk.js"></script>
 <script defer src="river-walk.js?v=forward-tour"></script>
-<script defer src="river-shore.js?v=ridge-atmosphere"></script>
+<script defer src="river-shore.js?v=hills-shore-profile"></script>
 <script defer src="river-portrait.js?v=refined-finale"></script>
 <script defer src="river-sounds.js?v=soaked"></script>
 <script defer src="river-audio.js?v=independent-ambience"></script>
 <script defer src="river-gi.js?v=bridge-joins"></script>
-<script defer src="river-shadows.js?v=shadow-crossfade"></script>
-<script defer src="garden.js?v=compact-mobile"></script>
+<script defer src="river-shadows.js?v=raster-shadow-full"></script>
+<script defer src="garden.js?v=hills-lod"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -69,6 +69,7 @@
         <div id="garden-settings-panel" class="garden-settings-panel" role="group" aria-label="Memorial settings" hidden>
           <button id="garden-sound" class="garden-pill" aria-pressed="false">Music off</button>
           <button id="garden-ambience" class="garden-pill" aria-pressed="false">Ambience off</button>
+          <button type="button" id="garden-fly" class="garden-pill" aria-label="Fly mode" aria-pressed="false" hidden>Fly mode off</button>
           <button id="garden-gi" class="garden-pill" aria-label="Ray-traced global illumination" aria-pressed="false" title="Ray-traced bounce lighting · Higher GPU cost" hidden>RTGI off</button>
           <select id="garden-shadows" class="garden-pill" aria-label="Cast shadows" hidden>
             <option value="0">Shadows off</option>
@@ -109,6 +110,10 @@
     <div class="garden-movement">
       <button class="garden-pill" id="garden-guide" aria-pressed="false">Follow the river</button>
       <p id="garden-directions">WASD or arrows to walk · Shift to move faster · Drag or Q/E to look</p>
+      <div class="garden-flight-pad" aria-label="Flight altitude controls">
+        <button type="button" class="garden-pill" data-walk="ascend" aria-label="Fly up">↑ Up</button>
+        <button type="button" class="garden-pill" data-walk="descend" aria-label="Fly down">↓ Down</button>
+      </div>
       <div class="walk-pad" aria-label="Walking controls">
         <button data-walk="left" aria-label="Turn left">↶</button>
         <button data-walk="forward" aria-label="Walk forward">↑</button>

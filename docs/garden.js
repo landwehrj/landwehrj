@@ -16,6 +16,7 @@
   const settings = dialog.querySelector('.garden-settings');
   const settingsToggle = settings.querySelector('#garden-settings-toggle');
   const settingsPanel = settings.querySelector('#garden-settings-panel');
+  const flyButton = settings.querySelector('#garden-fly');
   const giButton = document.querySelector('#garden-gi');
   const shadowControl = document.querySelector('#garden-shadows');
   const wideShadows = document.querySelector('#garden-wide-shadows');
@@ -27,8 +28,14 @@
   const distanceValue = distanceSetting.querySelector('output');
   const defaultViewDistance = distanceControl.valueAsNumber;
   const shortViewDistance = 160;
-  const retestViewDistance = new URLSearchParams(location.search).get('retest')==='view-distance';
-  const graphicsKey='lantern-river.graphics.v1';
+  const previewParams=new URLSearchParams(location.search);
+  const retestViewDistance = previewParams.get('retest')==='view-distance';
+  const trianglePreview=previewParams.get('renderer')==='realtime-rt';
+  const rasterPreview=previewParams.get('renderer')==='raster-shadows';
+  const rasterLayout=!rasterPreview || previewParams.get('shadow-size')==='512'?'standard':
+    previewParams.get('shadow-layout')==='focused'?'focused':'full';
+  const movingShadowLabel=rasterPreview?'Rasterized shadows':trianglePreview?'Triangle shadows':'Moving shadows';
+  const graphicsKey='lantern-river.graphics.v1'+(rasterPreview?'.raster':trianglePreview?'.triangle':'');
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -37,6 +44,8 @@
   const finalIndex = order.length-1;
   const fullTurn = Math.PI*2;
   const guide = document.querySelector('#garden-guide');
+  const directions = document.querySelector('#garden-directions');
+  const walkDirections=directions.textContent;
   const captionEl = document.querySelector('#garden-caption');
   const locationEl = document.querySelector('#garden-count');
   let current = 0, garden, preparing, opening, frame = 0, previousTime = 0;
@@ -44,7 +53,7 @@
   let visibilityRevision=0;
   let desiredMusic = true, audioAttempt = 0, entrance;
   const held = new Map();
-  let fastWalk=false;
+  let fastWalk=false,flying=false;
   let stickPointer=null,stickRight=0,stickForward=0,wide=false;
 
   function isHeld(action){
@@ -120,6 +129,19 @@
     else wideShadows.open=false;
   }
   settingsToggle.addEventListener('click',()=>setSettingsOpen(settingsPanel.hidden));
+  flyButton.addEventListener('click',()=>{
+    if(garden?.setFlight(!flying)){
+      setSettingsOpen(false);
+      view.focus({preventScroll:true});
+    }
+  });
+  function updateDirections(){
+    directions.textContent=flying
+      ? touchInput.matches?'Thumbstick to fly · Hold Up or Down · Drag to look'
+        :'WASD or arrows to fly · Space to rise · C to descend · Shift to go faster'
+      : touchInput.matches?'Thumbstick to move · Drag the scene to look':walkDirections;
+  }
+  touchInput.addEventListener('change',updateDirections);
   dialog.addEventListener('pointerdown',e=>{
     if(!settingsPanel.hidden && !settings.contains(e.target))setSettingsOpen(false);
   });
@@ -248,6 +270,7 @@
     const scene = new T.Scene();
     const camera = new T.PerspectiveCamera(56,1,.07,defaultViewDistance);
     camera.rotation.order = 'YXZ';
+    const horizonDistance={value:camera.far};
     const color = value => new T.Color(value).convertSRGBToLinear();
     const waterLevel=-.43;
     const nightTime={value:0};
@@ -295,8 +318,9 @@
         riverSurface=(modelMatrix*riverPoint).xyz;`
       );
       shader.uniforms.riverMistTime=nightTime;
+      Object.assign(shader.uniforms,horizonUniforms);
       shader.fragmentShader='varying vec3 riverSurface;\nuniform float riverMistTime;\n'
-        +riverShore.mistShader+shader.fragmentShader.replace(
+        +riverShore.mistShader+horizonFog+'\n'+shader.fragmentShader.replace(
         '#include <fog_fragment>',
         `#include <fog_fragment>
         #ifdef USE_FOG
@@ -308,6 +332,7 @@
           gl_FragColor.rgb=mix(gl_FragColor.rgb,fogColor,mistAmount);
           float groundMist=lowRiverMist(cameraPosition,riverSurface,${waterLevel.toFixed(2)},riverMistTime);
           gl_FragColor.rgb=mix(gl_FragColor.rgb,vec3(.049,.075,.107),groundMist);
+          gl_FragColor.rgb=fadeToHorizon(gl_FragColor.rgb,riverSurface);
         #endif`
       );
     }
@@ -337,15 +362,26 @@
         cloudBand=smoothstep(.46,.79,cloud)*smoothstep(.03,.21,h)*(1.-smoothstep(.47,.80,h));
         return color+cloudBand*vec3(.012,.019,.031)*opening;
       }`;
-    const sky=new T.Mesh(new T.SphereGeometry(Number(distanceControl.min)*.85,64,24),new T.ShaderMaterial({
+    const horizonUniforms={...horizonColors,horizonDistance};
+    const horizonFog=`${horizonShader}
+      uniform float horizonDistance;
+      vec3 fadeToHorizon(vec3 shaded,vec3 world){
+        float viewDepth=-(viewMatrix*vec4(world,1.)).z;
+        float haze=smoothstep(horizonDistance*.66,horizonDistance*.98,viewDepth);
+        if(haze<=0.)return shaded;
+        float clouds;
+        vec3 sky=skyAtmosphere(normalize(world-cameraPosition),clouds);
+        return mix(shaded,sky,haze);
+      }`;
+    const sky=new T.Mesh(new T.SphereGeometry(1,64,24),new T.ShaderMaterial({
       side:T.BackSide,depthTest:false,depthWrite:false,toneMapped:false,
       extensions:{derivatives:true},
       uniforms:{...horizonColors,moonDirection},
       vertexShader:`varying vec3 place;
         void main(){
-          vec4 point=modelMatrix*vec4(position,1.);
-          place=point.xyz-cameraPosition;
-          gl_Position=projectionMatrix*viewMatrix*point;
+          place=position;
+          gl_Position=projectionMatrix*vec4(mat3(viewMatrix)*position,1.);
+          gl_Position.z=gl_Position.w;
         }`,
       fragmentShader:`${horizonShader}
         uniform vec3 moonDirection;varying vec3 place;
@@ -380,6 +416,7 @@
         }`
     }));
     sky.renderOrder=-10;
+    sky.frustumCulled=false;
     scene.add(reflected(sky));
 
     const {center:riverCenter,bankX}=riverShore;
@@ -432,9 +469,9 @@
     poolView.position.set(ex,1.62,ez-1.4);
     poolView.lookAt(ex,waterLevel,ez-5.6);poolView.updateMatrixWorld();
     const poolMatrix=new T.Matrix4().multiplyMatrices(poolView.projectionMatrix,poolView.matrixWorldInverse);
-    const water=new T.Mesh(new T.PlaneGeometry(260,490),new T.ShaderMaterial({
+    const water=new T.Mesh(new T.PlaneGeometry(1500,1500),new T.ShaderMaterial({
       extensions:{derivatives:true},
-      uniforms:{...photoUniforms,reflectionPixel:{value:reflectionPixel},poolProjection:{value:poolMatrix},reflectedView:{value:reflection.texture},projection:{value:reflectionMatrix},time:nightTime,
+      uniforms:{...photoUniforms,...horizonUniforms,reflectionPixel:{value:reflectionPixel},poolProjection:{value:poolMatrix},reflectedView:{value:reflection.texture},projection:{value:reflectionMatrix},time:nightTime,
         riverBankProfile:{value:shore.profile},pileWakes:{value:pileWakes},wakeBounds:{value:wakeBounds},moonDirection,
         boatWaterFrame,portraitLight:{value:0},navy:{value:color('#02060d')}},
       vertexShader:`uniform mat4 projection;varying vec4 reflected;varying vec3 world;
@@ -443,6 +480,7 @@
       fragmentShader:`${samplePortrait}
         ${riverShore.waterShader}
         ${riverShore.mistShader}
+        ${horizonFog}
         uniform mat4 poolProjection;
         uniform sampler2D reflectedView,pileWakes;
         uniform vec4 wakeBounds,boatWaterFrame;
@@ -559,7 +597,7 @@
           }
         }
           river=mix(river,navy+vec3(.009,.016,.026),smoothstep(35.,135.,dist)*.38);
-          gl_FragColor=vec4(river,1.);
+          gl_FragColor=vec4(fadeToHorizon(river,world),1.);
         #include <encodings_fragment>
         }`
     }));
@@ -1355,12 +1393,13 @@
         };
       }
     }
-    riverShore.landscape(T,{
-      scene,batch,reflected,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,
-      slate:stonePores,wood:photoMaterials.wood,foliage:photoMaterials.foliage,
-      paintedStone:photoMaterials.paintedStone,forestFloor:photoMaterials.forestFloor,time:nightTime,moonDirection,
-      horizonColors,horizonShader
+    const detailShore=riverShore.landscape(T,{
+      scene,reflected,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,
+      slate:stonePores,
+      paintedStone:photoMaterials.paintedStone,forestFloor:photoMaterials.forestFloor,moonDirection,
+      nightTime,stock:photoMaterials.stockLandscape,compact:touchInput.matches
     });
+    flyButton.hidden=false;
     const bankShade=new T.LatheGeometry(shadeProfile.getPoints(16),20);
     const bankHoop=new T.TorusGeometry(.158,.012,5,14).rotateX(Math.PI/2);
     const bankLanterns=shore.lanterns.map(lamp=>({
@@ -1373,6 +1412,37 @@
       scene.add(reflected(mesh));
       return mesh;
     });
+    const bankHaze=new T.PlaneGeometry(2,2);
+    const bankHazePower=new T.InstancedBufferAttribute(new Float32Array(bankLanterns.length),1);
+    bankHazePower.setUsage(T.DynamicDrawUsage);
+    bankHaze.setAttribute('hazePower',bankHazePower);
+    const bankHalo=new T.InstancedMesh(bankHaze,new T.ShaderMaterial({
+      transparent:true,depthWrite:false,blending:T.AdditiveBlending,toneMapped:false,clipping:true,
+      vertexShader:`#include <clipping_planes_pars_vertex>
+        attribute float hazePower;varying vec2 hazePoint;varying float intensity;
+        void main(){
+          hazePoint=position.xy;
+          intensity=hazePower;
+          vec4 mvPosition=modelViewMatrix*instanceMatrix*vec4(0.,.32,0.,1.);
+          mvPosition.xy+=hazePoint*(1.62*length(instanceMatrix[0].xyz));
+          gl_Position=projectionMatrix*mvPosition;
+          #include <clipping_planes_vertex>
+        }`,
+      fragmentShader:`#include <clipping_planes_pars_fragment>
+        varying vec2 hazePoint;varying float intensity;
+        void main(){
+          #include <clipping_planes_fragment>
+          float radiusSquared=dot(hazePoint,hazePoint);
+          float opticalPath=sqrt(max(0.,1.-radiusSquared));
+          float density=exp(-4.8*radiusSquared)*opticalPath;
+          gl_FragColor=vec4(vec3(1.,.48,.16),.086*density*intensity);
+          #include <encodings_fragment>
+        }`
+    }),bankLanterns.length);
+    bankHalo.instanceMatrix.setUsage(T.DynamicDrawUsage);
+    bankHalo.frustumCulled=false;
+    scene.add(reflected(bankHalo));
+    bankMeshes.push(bankHalo);
 
     // Thousands of distant envelopes use one point draw per pass. Their real
     // positions also render into the river reflection, including on camera turns.
@@ -2936,8 +3006,14 @@
         support.position.set(x+breeze.x*Math.sin(sway),y+breeze.y*Math.sin(rise),z+breeze.z*Math.cos(sway*.83));
         support.rotation.set(.045*Math.cos(rise),phase+.14*Math.sin(sway),.065*Math.sin(sway));
         support.scale.setScalar(size);support.updateMatrix();
+        const power=.94+.045*Math.sin(t*3.2+phase)+.025*Math.sin(t*6.7+phase*2.1);
+        capCenter.set(0,.32,0).applyMatrix4(support.matrix);
+        shore.lighting.set(i,capCenter.x,capCenter.y,capCenter.z,power*size);
+        bankHazePower.setX(i,power);
         for(const mesh of bankMeshes)mesh.setMatrixAt(i,support.matrix);
       });
+      shore.lighting.sources.needsUpdate=true;
+      bankHazePower.needsUpdate=true;
       for(const mesh of bankMeshes)mesh.instanceMatrix.needsUpdate=true;
       lanterns.forEach(({x,y,z,size,phase,glow,fixture,mountHeight,cordIndex,movingPath,flight},i)=>{
         const lift=Math.sin(t*.36+phase), drift=Math.sin(t*.21+phase*1.2);
@@ -3249,7 +3325,7 @@
       movingEnabled=false;
       setMovingActive(false);
       console.warn('Moving lantern shadows are unavailable:',error);
-      movingButton.textContent='Moving shadows unavailable';
+      movingButton.textContent=movingShadowLabel+' unavailable';
       movingButton.title=error.message;
       movingButton.setAttribute('aria-pressed','false');
       movingButton.disabled=true;
@@ -3258,21 +3334,38 @@
       if(!movingLanterns.length || movingButton.disabled || enabled===movingEnabled)return;
       if(enabled && !movingEffect){
         try{
-          const matrices=architectureBoxes().map(box=>box.matrix);
-          movingEffect=riverShadows.createMoving(T,renderer,movingValues,matrices,screenMaterial,drawPass);
+          let triangles=null;
+          if(trianglePreview){
+            movingButton.disabled=true;
+            movingButton.setAttribute('aria-busy','true');
+            movingButton.textContent='Loading triangle shadows…';
+            const {triangleShadowSource}=await import('./garden-triangle-shadows.js?v=2');
+            triangles=triangleShadowSource(T,scene,architectureMaterials);
+          }
+          const matrices=triangles || rasterPreview?[]:architectureBoxes().map(box=>box.matrix);
+          const rasterCasters=rasterPreview?scene.children.filter(object=>object.isMesh &&
+            architectureMaterials.includes(object.material)):null;
+          movingEffect=riverShadows.createMoving(T,renderer,movingValues,matrices,screenMaterial,drawPass,triangles,rasterCasters,rasterLayout);
         }catch(error){
           failMovingShadows(error);
           return;
+        }finally{
+          movingButton.removeAttribute('aria-busy');
         }
       }
       movingEnabled=enabled;
+      movingButton.disabled=false;
       movingButton.setAttribute('aria-pressed',String(movingEnabled));
-      movingButton.textContent='Moving shadows'+(movingEnabled?' on':' off');
+      movingButton.textContent=movingShadowLabel+(movingEnabled?' on':' off');
       if(movingEnabled)setMovingActive(true);
       if(redraw && dialog.open && !view.hidden)draw();
     }
     if(movingLanterns.length){
       movingButton.hidden=false;
+      if(rasterPreview || trianglePreview){
+        movingButton.textContent=movingShadowLabel+' off';
+        movingButton.setAttribute('aria-label',rasterPreview?'Rasterized moving lantern shadows':'Triangle ray-traced moving lantern shadows');
+      }
       movingButton.addEventListener('click',async ()=>{
         await setMovingShadows(!movingEnabled);
         saveGraphics(graphicsSettings());
@@ -3315,15 +3408,33 @@
       drawPass(soften,glowWide);
       drawPass(combine,null);
     }
+    const lanternPool=new T.Vector3();
+    function lanternFootprint(lamp){
+      const axis=lamp.movingPath.axis;
+      const distanceToDeck=T.MathUtils.clamp((lamp.glow.position.y-.12)/-axis.y,.7,3.6);
+      lanternPool.copy(lamp.glow.position).addScaledVector(axis,distanceToDeck).applyMatrix4(camera.matrixWorldInverse);
+      const radius=1.7;
+      if(lanternPool.z>=radius)return 0;
+      const depth=Math.max(.5,-lanternPool.z);
+      const projection=camera.projectionMatrix.elements;
+      const x=lanternPool.x*projection[0]/depth,y=lanternPool.y*projection[5]/depth;
+      const rx=radius*projection[0]/depth,ry=radius*projection[5]/depth;
+      const width=Math.max(0,Math.min(1,x+rx)-Math.max(-1,x-rx));
+      const height=Math.max(0,Math.min(1,y+ry)-Math.max(-1,y-ry));
+      return width*height;
+    }
     function draw(){
       if(!ready)return;
+      camera.updateMatrixWorld();
+      detailShore(camera.position);
       if(giUniforms?.riverGIEnabled.value)giEffect.update(nightTime.value);
       if(movingActive){
         const nearby=movingEnabled?movingLanterns.map(lamp=>{
           const distance=camera.position.distanceTo(lamp.movingPath.center);
           const visibility=1-T.MathUtils.smoothstep(distance,15,22);
           const power=visibility*(.96+.04*Math.sin(nightTime.value*3.2+lamp.movingPath.phase));
-          return {lamp,distance,power};
+          const footprint=rasterLayout==='focused' && visibility>0?visibility*lanternFootprint(lamp):0;
+          return {lamp,distance,power,footprint};
         }).filter(light=>light.power>0):[];
         try{
           const occupied=movingEffect.update(performance.now()*.001,nearby);
@@ -3334,8 +3445,6 @@
           updateLanterns(nightTime.value);
         }
       }
-      sky.position.set(camera.position.x,0,camera.position.z);
-      camera.updateMatrixWorld();
       if(hover)updatePhotoCursor();
       camera.getWorldDirection(gaze);gaze.y=-gaze.y;
       mirror.position.copy(camera.position);mirror.position.y=2*waterLevel-camera.position.y;
@@ -3372,6 +3481,7 @@
     function setViewDistance(distance){
       distanceControl.value=String(Number.isFinite(distance)?distance:defaultViewDistance);
       camera.far=distanceControl.valueAsNumber;
+      horizonDistance.value=camera.far;
       camera.updateProjectionMatrix();
       distanceValue.value=distanceControl.value;
     }
@@ -3536,6 +3646,7 @@
     }
     function shortest(a){return Math.atan2(Math.sin(a),Math.cos(a))}
     let guidePoints=[],guideTarget=0,guideRunning=false,guideLookTime=0,arrival=null;
+    const flightStart=new T.Vector3();
     let guideTurnRate=0,guideMoveTime=0;
     const photoHold=5;
     let untilStep=.52;
@@ -3583,7 +3694,7 @@
       setGuide(false);
     }
     function follow(){
-      if(arrival || drag)return;
+      if(arrival || drag || flying)return;
       if(guidePoints.length){setGuide(!guideRunning);return}
       const p=camera.position,room=riverWalk.roomAt(p.x,p.z);
       if(elapsed>=0 && Math.hypot(p.x-ex,p.z-ez)<4){
@@ -3681,7 +3792,10 @@
       if(++guideTarget===guidePoints.length)beginFarewell();
     }
     function go(index,reset=false){
-      if(reset){arrival=null;walkPanel.inert=Boolean(opening);elapsed=-1;showFinale(-1)}
+      if(reset){
+        arrival=null;walkPanel.inert=Boolean(opening);elapsed=-1;showFinale(-1);
+        if(flying)setFlight(false);
+      }
       if(arrival)return;
       untilStep=.52;lastLocation=null;
       if(index===finalIndex && elapsed<0){
@@ -3700,13 +3814,46 @@
       }
       stopGuide();updatePathMemories(0);camera.rotation.set(pitch,yaw,0,'YXZ');draw();
     }
+    function setFlight(enable){
+      if(arrival)return false;
+      const p=camera.position;
+      if(enable)flightStart.copy(p);
+      else{
+        if(!canWalk(p.x,p.z))p.copy(flightStart);
+        p.y=1.62;
+        untilStep=.52;
+      }
+      flying=enable;
+      held.clear();fastWalk=false;resetStick();cancelLook();stopGuide();
+      guide.hidden=flying;
+      flyButton.setAttribute('aria-pressed',String(flying));
+      flyButton.textContent=flying?'Fly mode on':'Fly mode off';
+      dialog.classList.toggle('garden-flying',flying);
+      updateDirections();
+      if(flying)pathCaption('Free exploration','Fly mode');
+      return true;
+    }
     function move(right,forward,turn,dt){
       if(!drag)yaw+=turn*dt*1.55;
+      if(flying){
+        fly(right,forward,Number(isHeld('ascend'))-Number(isHeld('descend')),dt);
+        return;
+      }
       if(!right && !forward)return;
       const k=dt*(fastWalk?6.6:3)/Math.max(1,Math.hypot(right,forward));
       const dx=(Math.cos(yaw)*right-Math.sin(yaw)*forward)*k;
       const dz=(-Math.sin(yaw)*right-Math.cos(yaw)*forward)*k;
       walk(dx,dz);
+    }
+    function fly(right,forward,lift,dt){
+      if(!right && !forward && !lift)return;
+      const p=camera.position,limit=T.MathUtils.clamp;
+      const speed=dt*(fastWalk?22:9)/Math.max(1,Math.hypot(right,forward));
+      p.x=limit(p.x+(Math.cos(yaw)*right-Math.sin(yaw)*forward)*speed,-56,56);
+      p.z=limit(p.z-(Math.sin(yaw)*right+Math.cos(yaw)*forward)*speed,-253,72);
+      const side=p.x<riverCenter(p.z)?-1:1,offset=(p.x-bankX(p.z,side))*side;
+      const floor=offset>0?shore.ground(p.z,side,offset):waterLevel;
+      p.y=limit(p.y+lift*dt*(fastWalk?13:6),floor+.85,48);
     }
     function canWalk(x,z){
       if(!riverWalk.walkable(x,z))return false;
@@ -3769,14 +3916,14 @@
         else move(stickRight+Number(isHeld('strafeRight'))-Number(isHeld('strafeLeft')),
                   stickForward+Number(isHeld('forward'))-Number(isHeld('back')),
                   Number(isHeld('left'))-Number(isHeld('right')),walkDt);
-        if(elapsed<0 && p.z<=overlookEntranceZ && Math.abs(p.x-ex)<landingWidth/2)beginFarewell();
+        if(!flying && elapsed<0 && p.z<=overlookEntranceZ && Math.abs(p.x-ex)<landingWidth/2)beginFarewell();
       }
       if(elapsed>=0){
         elapsed+=dt;showFinale(elapsed);
         if(arrival)frameFarewell();
       }
       updatePathMemories(Math.min(.18,dt));
-      if(!guideLookTime)updateLocation(p);
+      if(!flying && !guideLookTime)updateLocation(p);
       camera.rotation.set(pitch,yaw,0,'YXZ');updateLanterns(time);updateRowboat(nightTime.value);draw();
     }
     function photoAt(clientX,clientY){
@@ -3843,9 +3990,13 @@
     canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();showFallback()});
     updateRowboat(0);updateLanterns(0);resize(false);
     ready=true;
-    return {go,update,resize,cancelLook,step(action){
+    return {go,update,resize,cancelLook,setFlight,step(action){
       if(arrival)return;
       if(guidePoints.length)stopGuide();
+      if(flying && (action==='ascend' || action==='descend')){
+        fly(0,0,action==='ascend'?1:-1,.17);
+        return;
+      }
       move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
     },initialiseGraphics,resetScene(){
       updateLanterns(0);updateRowboat(nightTime.value);go(0,true);
@@ -3896,6 +4047,7 @@
     wideShadows.hidden=true;
     if(movingButton)movingButton.hidden=true;
     distanceSetting.hidden=true;
+    flyButton.hidden=true;
     select(current);
   }
   function prepare(){
@@ -3910,19 +4062,37 @@
     }).then(async atlas=>({atlas,atlasMap:await textureLoader.loadAsync(atlas.image)}));
     // Poly Haven CC0. The finish maps pack height, roughness and grain.
     const optionalTexture=src=>textureLoader.loadAsync(src).catch(()=>null);
+    const optionalModel=(src,read)=>new Promise(resolve=>{
+      const script=document.createElement('script');
+      script.src=src;
+      script.onload=()=>resolve(read());
+      script.onerror=()=>resolve(null);
+      document.head.appendChild(script);
+    });
+    const barkTextures=name=>Promise.all(['bark','normal','roughness'].map(
+      kind=>optionalTexture('materials/ez-tree-'+name+'-'+kind+'.webp')
+    )).then(([map,normalMap,roughnessMap])=>({map,normalMap,roughnessMap}));
+    const landscapeRequest=Promise.all([
+      optionalModel('materials/ez-tree-landscape.js?v=shoreline',()=>typeof riverStockLandscape==='undefined'?null:riverStockLandscape),
+      optionalTexture('materials/ez-tree-needles.webp?v=stock'),
+      optionalTexture('materials/ez-tree-ash-leaves.webp'),
+      optionalTexture('materials/ez-tree-aspen-leaves.webp'),
+      barkTextures('pine'),barkTextures('ash')
+    ]).then(([presets,pine,ash,aspen,Bark003,Bark001])=>
+      presets?{presets,leaves:{pine,ash,aspen},bark:{Bark003,Bark001}}:null);
     preparing=Promise.all([
       atlasRequest,
       location.protocol==='file:'?null:optionalTexture('photos/01.webp'),
       optionalTexture('materials/wood-finish.webp?v=2'),
       optionalTexture('materials/slate-finish.webp'),
       optionalTexture('materials/deck-color.webp'),
-      optionalTexture('materials/river-foliage.webp'),
       optionalTexture('materials/river-painted-slate.webp'),
       optionalTexture('materials/river-forest-floor.webp'),
-      optionalTexture('materials/pavilion-timber.webp')
-    ]).then(([{atlas,atlasMap},finalePhoto,wood,slate,deck,foliage,paintedStone,forestFloor,pavilionTimber])=>{
+      optionalTexture('materials/pavilion-timber.webp'),
+      landscapeRequest
+    ]).then(([{atlas,atlasMap},finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape])=>{
       loadingStatus.textContent='Preparing the river…';
-      garden=makeGarden(atlas,{atlasMap,finalePhoto,wood,slate,deck,foliage,paintedStone,forestFloor,pavilionTimber});
+      garden=makeGarden(atlas,{atlasMap,finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape});
       return garden;
     });
     return preparing;
@@ -4009,7 +4179,9 @@
   dialog.addEventListener('keydown',e=>{
     if(settings.contains(e.target))return;
     if(!walkPanel.inert)fastWalk=e.shiftKey;
-    const action=keys[e.code];
+    const altitudeKey=flying && (e.code==='Space' || e.code==='KeyC');
+    if(altitudeKey && e.code==='Space' && e.target.closest('button, input, select, a, summary'))return;
+    const action=altitudeKey?(e.code==='Space'?'ascend':'descend'):keys[e.code];
     const browserShortcut=e.altKey || e.metaKey || (e.ctrlKey && !e.code.startsWith('Arrow'));
     if(!action || viewer.open || view.hidden || browserShortcut)return;
     e.preventDefault();
@@ -4031,9 +4203,7 @@
     if(document.hidden){stopFrames();pauseMusic();ambience.pause()}
     else if(dialog.open){startFrames();playMusic();startAmbience()}
   });
-  if(touchInput.matches){
-    document.querySelector('#garden-directions').textContent='Thumbstick to move · Drag the scene to look';
-  }
+  updateDirections();
   audioLabel();
   if(location.hash==='#memorial')enter();
 })();
