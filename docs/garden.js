@@ -860,6 +860,7 @@
     }
     function finishJoinery(shader,finish){
       const axes=finish.axes || (finish.horizontal?'xzy':'xyz');
+      const hasParallax=finish.timber && !finish.curved;
       const varyings='varying vec4 railPosition;\nvarying vec3 railNormal;\n'
         +(finish.timber?'varying float timberSeed;\n':'')
         +(finish.curved?'varying vec2 curvedGrain;\n':'');
@@ -882,28 +883,41 @@
         timberSeed=fract(sin(dot(timberOrigin,vec3(13.1,37.4,57.7)))*43758.5453);`:''}
       `);
       shader.fragmentShader=varyings+'uniform sampler2D railFinishMap;\n'
-        +(finish.timber?'uniform sampler2D weatheredTimber;\n':'')+shader.fragmentShader
+        +(finish.timber?'uniform sampler2D weatheredTimber;\n':'')
+        +(hasParallax?riverShore.parallaxShader:'')+shader.fragmentShader
         .replace('#include <color_fragment>',`
           #include <color_fragment>
           vec3 railAxis=abs(normalize(railNormal));
           vec3 railBlend=pow(railAxis,vec3(8.));
           railBlend/=dot(railBlend,vec3(1.));
           vec3 railUV=railPosition.xyz*${finish.scale};
-          vec3 finishGrain=${finish.curved?'texture2D(railFinishMap,curvedGrain).rgb':`
+          ${finish.timber?`
+          vec3 woodRun=railUV+timberSeed*vec3(.73,.98,.49);
+          vec3 weathered=${finish.curved?'texture2D(weatheredTimber,curvedGrain+timberSeed*vec2(.47,.36)).rgb':
+            'riverTriplanar(weatheredTimber,woodRun,railBlend,.65)'};
+          const vec3 timberLuma=vec3(.29,.58,.13);
+          ${hasParallax?`
+          // Use broader grain for depth so fine fibers don't ripple as the camera moves.
+          float timberHeight=dot(riverTriplanar(weatheredTimber,woodRun,railBlend,2.0),timberLuma);
+          vec3 woodRay=riverReliefRay(vViewPosition,normalize(vNormal),5.6);
+          // Convert the view-space ray into each beam's grain coordinates.
+          vec2 screenShift=riverReliefScreenShift(vViewPosition,woodRay);
+          float recess=1.-smoothstep(.31,.49,timberHeight);
+          vec3 woodShift=(dFdx(railUV)*screenShift.x+dFdy(railUV)*screenShift.y)*(.010*recess);
+          weathered=riverReliefSample(weatheredTimber,woodRun,woodShift,railBlend,weathered,.65);
+          railUV+=woodShift;`:''}
+          `:''}
+          vec3 finishGrain=${hasParallax?'riverTriplanar(railFinishMap,railUV,railBlend,.85)':
+            finish.curved?'texture2D(railFinishMap,curvedGrain).rgb':`
                           texture2D(railFinishMap,railUV.zy).rgb*railBlend.x
                           +texture2D(railFinishMap,railUV.xz).rgb*railBlend.y
                           +texture2D(railFinishMap,railUV.xy).rgb*railBlend.z`};
           float bevelWear=${finish.curved?'smoothstep(.18,.47,railAxis.z)*(1.-smoothstep(.74,.94,railAxis.z))'
                                            :'smoothstep(.05,.24,1.-max(railAxis.x,max(railAxis.y,railAxis.z)))'};
           bevelWear*=mix(.48,1.,smoothstep(.33,.73,finishGrain.g));
-          diffuseColor.rgb*=mix(.65,1.28,finishGrain.b)*(1.+bevelWear*${finish.wear});
+          diffuseColor.rgb*=mix(${hasParallax?'.81,1.17':'.65,1.28'},finishGrain.b)*(1.+bevelWear*${finish.wear});
           ${finish.timber?`
-          vec3 woodRun=railUV+timberSeed*vec3(.73,.98,.49);
-          vec3 weathered=${finish.curved?'texture2D(weatheredTimber,curvedGrain+timberSeed*vec2(.47,.36)).rgb':`
-                        texture2D(weatheredTimber,woodRun.zy).rgb*railBlend.x
-                        +texture2D(weatheredTimber,woodRun.xz).rgb*railBlend.y
-                        +texture2D(weatheredTimber,woodRun.xy).rgb*railBlend.z`};
-          float timberGrain=dot(weathered,vec3(.29,.58,.13));
+          float timberGrain=dot(weathered,timberLuma);
           float seat=${finish.curved?'0.':'1.-smoothstep(.014,.078,railPosition.w-abs(railPosition.y))'};
           vec3 timberTint=mix(vec3(.55),sRGBToLinear(vec4(weathered,1.)).rgb*3.65,.77);
           diffuseColor.rgb*=timberTint*mix(1.,.61,seat)
@@ -924,8 +938,8 @@
         `)
         .replace('#include <roughnessmap_fragment>',`
           #include <roughnessmap_fragment>
-          roughnessFactor=clamp(roughnessFactor+(finishGrain.g-.5)*.34-bevelWear*.12,.27,.89);
-          ${finish.timber?'roughnessFactor=clamp(roughnessFactor+.31*(.53-timberGrain)+.081*seat,.44,.94);':''}
+          roughnessFactor=clamp(roughnessFactor+(finishGrain.g-.5)*${hasParallax?'.20':'.34'}-bevelWear*.12,.27,.89);
+          ${finish.timber?`roughnessFactor=clamp(roughnessFactor+${hasParallax?'.19':'.31'}*(.53-timberGrain)+.081*seat,.44,.94);`:''}
           ${finish.groundContact?'roughnessFactor+=.065*postGround;':''}
         `)
         .replace('#include <normal_fragment_maps>',`
@@ -933,10 +947,10 @@
           vec3 railDx=dFdx(-vViewPosition),railDy=dFdy(-vViewPosition);
           vec3 railTx=cross(railDy,normal),railTy=cross(normal,railDx);
           float railDet=dot(railDx,railTx);
-          float railRelief=finishGrain.r*${finish.relief}${finish.timber?
-            (finish.curved?'+.0012*timberGrain':'+.0022*timberGrain'):''};
+          float railRelief=${hasParallax?'.00065*finishGrain.r+.0012*timberHeight':
+            `finishGrain.r*${finish.relief}${finish.timber?'+.0012*timberGrain':''}`};
           vec3 railSlope=sign(railDet)*(railTx*dFdx(railRelief)+railTy*dFdy(railRelief));
-          ${finish.timber?`railSlope*=min(1.,${finish.curved?'.30':'.47'}*abs(railDet)/max(length(railSlope),1e-7));`:''}
+          ${finish.timber?`railSlope*=min(1.,${hasParallax?'.23':'.30'}*abs(railDet)/max(length(railSlope),1e-7));`:''}
           normal=normalize(max(abs(railDet),1e-7)*normal-railSlope);
         `);
     }
@@ -1268,7 +1282,17 @@
                 timberAcross=boardAcross;
               #endif
             `);
-            shader.fragmentShader=across+'uniform sampler2D boardGrainMap;\n'+shader.fragmentShader.replace('#include <color_fragment>',`
+            shader.fragmentShader=across+'uniform sampler2D boardGrainMap;\n'+riverShore.parallaxShader
+            +shader.fragmentShader.replace('#include <map_fragment>',`
+              float plankRelief=texture2D(bumpMap,vUv,1.1).r;
+              float recess=1.-smoothstep(.51,.65,plankRelief);
+              vec3 deckNormal=normalize(vNormal);
+              float deckTop=smoothstep(.82,.96,inverseTransformDirection(deckNormal,viewMatrix).y);
+              vec3 deckRay=riverReliefRay(vViewPosition,deckNormal,5.9);
+              vec2 deckScreenShift=riverReliefScreenShift(vViewPosition,deckRay)*(.0045*recess*deckTop);
+              vec2 deckShift=riverReliefUVShift(vUv,deckScreenShift);
+              diffuseColor*=mapTexelToLinear(riverOffsetTexel(map,vUv,deckShift,.23));
+            `).replace('#include <color_fragment>',`
               #include <color_fragment>
               // Canvas row zero is at the top. Match the staggered joints in the wood maps.
               float plankRow=floor((1.-vUv.y)*${plankRows.toFixed(1)});
@@ -1278,21 +1302,18 @@
               float plankVariance=fract(sin(dot(vec2(board,plankRow),vec2(127.1,311.7)))*43758.5453)-.5;
               float detail=1.-smoothstep(.28,1.,max(fwidth(vUv.x),fwidth(vUv.y)*${plankRows.toFixed(1)}));
               float dampEdge=smoothstep(.58,.98,abs(timberAcross*2.-1.));
-              vec3 boardGrain=texture2D(boardGrainMap,vec2(vUv.y*11.3+plankVariance*.21,vUv.x*1.72)).rgb;
+              vec2 grainUV=vec2(vUv.y*11.3+plankVariance*.21,vUv.x*1.72);
+              vec3 boardGrain=riverOffsetTexel(boardGrainMap,grainUV,deckShift.yx*vec2(11.3,1.72),.75).rgb;
               diffuseColor.rgb*=(1.+.12*plankVariance*detail)*(1.-.09*dampEdge)
                                *mix(.81,1.18,smoothstep(.14,.79,boardGrain.b));
             `).replace('#include <roughnessmap_fragment>',`
-              #include <roughnessmap_fragment>
+              float roughnessFactor=roughness*riverOffsetTexel(roughnessMap,vUv,deckShift,.55).g;
               roughnessFactor=clamp(.66+(.45*(roughnessFactor-.62))+.15*plankVariance*detail
-                                    +.32*(boardGrain.g-.56)-.13*dampEdge,.43,.91);
+                                    +.23*(boardGrain.g-.56)-.13*dampEdge,.43,.91);
               roughnessFactor=mix(roughnessFactor,.40,dockDamp*(.24+.50*boardGrain.g));
             `).replace('#include <normal_fragment_maps>',`
-              #include <normal_fragment_maps>
-              vec3 boardDx=dFdx(-vViewPosition),boardDy=dFdy(-vViewPosition);
-              vec3 boardTx=cross(boardDy,normal),boardTy=cross(normal,boardDx);
-              float boardDet=dot(boardDx,boardTx),boardRelief=.0058*boardGrain.r;
-              vec3 boardSlope=sign(boardDet)*(boardTx*dFdx(boardRelief)+boardTy*dFdy(boardRelief));
-              normal=normalize(max(abs(boardDet),1e-7)*normal-boardSlope);
+              float boardRelief=.68*bumpScale*plankRelief+.0025*boardGrain.r;
+              normal=perturbNormalArb(-vViewPosition,normal,vec2(dFdx(boardRelief),dFdy(boardRelief)),faceDirection);
             `);
           }
           if(isDeckTrim){
@@ -1303,7 +1324,7 @@
                 #include <begin_vertex>
                 trimSize=trimDimensions;
               `);
-            shader.fragmentShader=sizeVarying+'uniform sampler2D boardGrainMap;\n'
+            shader.fragmentShader=sizeVarying+'uniform sampler2D boardGrainMap;\n'+riverShore.parallaxShader
               +shader.fragmentShader.replace('#include <map_fragment>',`
               // Sample inside a deck board, skipping its seams and nails.
               // Mirror the length so long trim boards can use the same grain.
@@ -1312,19 +1333,29 @@
               float trimLength=abs(2.*fract(trimRun+.5)-1.);
               float trimAcross=.5+(vUv.x-.5)*min(trimSize.x/${plankWidth.toFixed(2)},1.)*.82;
               vec2 trimUV=vec2(.17+.76*trimLength,1.-trimAcross/${plankRows.toFixed(1)});
-              vec3 trimGrain=texture2D(boardGrainMap,trimMeters*vec2(3.14,.91)).rgb;
               vec2 seamDistance=min(trimMeters,trimSize-trimMeters);
               float edgeDistance=min(seamDistance.x,seamDistance.y);
               float seam=smoothstep(0.,.005,edgeDistance+fwidth(edgeDistance)*.4);
-              diffuseColor*=mapTexelToLinear(texture2D(map,trimUV));
+              vec2 trimGrainUV=trimMeters*vec2(3.14,.91);
+              float trimHeight=texture2D(boardGrainMap,trimGrainUV,1.8).r;
+              float recess=1.-smoothstep(.30,.68,trimHeight);
+              vec3 trimNormal=normalize(vNormal);
+              float trimTop=smoothstep(.82,.96,inverseTransformDirection(trimNormal,viewMatrix).y);
+              vec3 trimRay=riverReliefRay(vViewPosition,trimNormal,5.9);
+              vec2 trimScreenShift=riverReliefScreenShift(vViewPosition,trimRay)
+                *(.0032*recess*trimTop*smoothstep(.005,.022,edgeDistance));
+              vec2 trimShift=riverReliefUVShift(trimUV,trimScreenShift);
+              vec3 trimGrain=riverOffsetTexel(boardGrainMap,trimGrainUV,
+                riverReliefUVShift(trimGrainUV,trimScreenShift),.75).rgb;
+              diffuseColor*=mapTexelToLinear(riverOffsetTexel(map,trimUV,trimShift,.23));
               diffuseColor.rgb*=mix(.81,1.18,smoothstep(.14,.79,trimGrain.b))*mix(.74,1.,seam);
             `).replace('#include <roughnessmap_fragment>',`
-              float trimFinish=roughness*texture2D(roughnessMap,trimUV).g;
-              float roughnessFactor=clamp(.66+.45*(trimFinish-.62)+.32*(trimGrain.g-.56),.43,.91);
+              float trimFinish=roughness*riverOffsetTexel(roughnessMap,trimUV,trimShift,.55).g;
+              float roughnessFactor=clamp(.66+.45*(trimFinish-.62)+.23*(trimGrain.g-.56),.43,.91);
               roughnessFactor=mix(roughnessFactor,.31,wetness*.74);
               roughnessFactor=mix(roughnessFactor,.35,dockDamp*.58);
             `).replace('#include <normal_fragment_maps>',`
-              float trimRelief=bumpScale*texture2D(bumpMap,trimUV).r+.0058*trimGrain.r;
+              float trimRelief=.68*bumpScale*texture2D(bumpMap,trimUV,1.1).r+.0025*trimHeight;
               normal=perturbNormalArb(-vViewPosition,normal,vec2(dFdx(trimRelief),dFdy(trimRelief)),faceDirection);
             `);
           }
@@ -1333,23 +1364,24 @@
             shader.uniforms.riverEdgeWear={value:isCap ? .24 : .11};
             // Project against the world axes so stretching the base geometry
             // never stretches the finish. Blend the projections on the bevels.
-            shader.fragmentShader='uniform sampler2D riverStonePores;\nuniform float riverEdgeWear;\n'
+            shader.fragmentShader='uniform sampler2D riverStonePores;\nuniform float riverEdgeWear;\n'+riverShore.parallaxShader
               +shader.fragmentShader.replace('#include <map_fragment>',`
-              vec3 stoneAxis=abs(inverseTransformDirection(normalize(vNormal),viewMatrix));
+              vec3 stoneNormal=normalize(vNormal);
+              vec3 stoneAxis=abs(inverseTransformDirection(stoneNormal,viewMatrix));
               vec3 stoneWeight=pow(stoneAxis,vec3(7.0));
               stoneWeight/=dot(stoneWeight,vec3(1.0));
-              vec3 grainUV=riverSurface*.91;
-              vec4 grain=texture2D(map,grainUV.zy)*stoneWeight.x
-                        +texture2D(map,grainUV.xz)*stoneWeight.y
-                        +texture2D(map,grainUV.xy)*stoneWeight.z;
-              vec3 poresUV=riverSurface*${photoMaterials.slate?'2.65':'5.1'};
-              vec3 pores=texture2D(riverStonePores,poresUV.zy).rgb*stoneWeight.x
-                        +texture2D(riverStonePores,poresUV.xz).rgb*stoneWeight.y
-                        +texture2D(riverStonePores,poresUV.xy).rgb*stoneWeight.z;
+              const float poreScale=${photoMaterials.slate?'2.65':'5.1'};
+              vec3 poresUV=riverSurface*poreScale;
+              vec3 pores=riverTriplanar(riverStonePores,poresUV,stoneWeight,0.);
+              float recess=1.-smoothstep(.38,.68,pores.r);
+              vec3 stoneOffset=(riverReliefRay(vViewPosition,stoneNormal,5.8)*mat3(viewMatrix))
+                              *recess*${photoMaterials.slate?'.013':'.004'};
+              pores=riverReliefSample(riverStonePores,poresUV,stoneOffset*poreScale,stoneWeight,pores,0.);
+              vec3 grain=riverTriplanar(map,(riverSurface+stoneOffset)*.91,stoneWeight,0.);
               float worn=smoothstep(.12,.69,stoneAxis.y)*(1.-smoothstep(.94,.999,stoneAxis.y));
               float mottle=${photoMaterials.slate?'smoothstep(.16,.70,pores.b)':'smoothstep(.33,.77,grain.g)'};
               float atStoneFoot=1.-smoothstep(.008,.14,abs(riverSurface.y));
-              diffuseColor.rgb*=mapTexelToLinear(grain).rgb*mix(vec3(${isGateCap?'.57,.62,.67':'.72,.78,.86'}),
+              diffuseColor.rgb*=mapTexelToLinear(vec4(grain,1.)).rgb*mix(vec3(${isGateCap?'.57,.62,.67':'.72,.78,.86'}),
                                vec3(${isGateCap?'1.44,1.46,1.49':'1.32,1.33,1.36'}),mottle)
                                *(1.+worn*riverEdgeWear)*(1.-.19*atStoneFoot);
               float dockWall=(1.-smoothstep(.18,.42,abs(riverSurface.z-(${(entryThresholdZ-.245).toFixed(3)}))))

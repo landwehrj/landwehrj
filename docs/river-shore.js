@@ -64,6 +64,60 @@ const riverShore = (() => {
     }
     return [west,east];
   }
+  const parallaxShader=`
+    vec3 riverReliefRay(vec3 toEye,vec3 normal,float range){
+      float distanceToEye=length(toEye);
+      vec3 eye=toEye/max(.001,distanceToEye);
+      float facing=dot(eye,normal);
+      // Fade out where the tiling is too small to see or the ray skims the face.
+      float fade=(1.-smoothstep(range*.38,range,distanceToEye))*smoothstep(.09,.32,facing);
+      return (normal*facing-eye)*(fade/max(.46,facing));
+    }
+    vec2 riverReliefScreenShift(vec3 toEye,vec3 ray){
+      vec3 dx=dFdx(-toEye),dy=dFdy(-toEye);
+      vec3 face=cross(dx,dy);
+      return vec2(dot(ray,cross(dy,face)),dot(ray,cross(face,dx)))/max(dot(face,face),1e-20);
+    }
+    vec2 riverReliefUVShift(vec2 uv,vec2 screenShift){
+      return dFdx(uv)*screenShift.x+dFdy(uv)*screenShift.y;
+    }
+    vec4 riverOffsetTexel(sampler2D source,vec2 uv,vec2 shift,float mipBias){
+      #if __VERSION__ >= 300
+        float footprint=exp2(mipBias);
+        return texture2DGradEXT(source,uv+shift,dFdx(uv)*footprint,dFdy(uv)*footprint);
+      #else
+        return texture2D(source,uv+shift,mipBias);
+      #endif
+    }
+    vec3 riverTriplanar(sampler2D source,vec3 uv,vec3 weight,float mipBias){
+      return texture2D(source,uv.zy,mipBias).rgb*weight.x
+            +texture2D(source,uv.xz,mipBias).rgb*weight.y
+            +texture2D(source,uv.xy,mipBias).rgb*weight.z;
+    }
+    vec3 riverReliefSample(sampler2D source,vec3 uv,vec3 shift,vec3 weight,vec3 original,float mipBias){
+      #if __VERSION__ >= 300
+        float footprint=exp2(mipBias);
+        vec3 dx=dFdx(uv)*footprint,dy=dFdy(uv)*footprint;
+        if(dot(shift,shift)<1e-10)return original;
+        uv+=shift;
+        return texture2DGradEXT(source,uv.zy,dx.zy,dy.zy).rgb*weight.x
+              +texture2DGradEXT(source,uv.xz,dx.xz,dy.xz).rgb*weight.y
+              +texture2DGradEXT(source,uv.xy,dx.xy,dy.xy).rgb*weight.z;
+      #else
+        return riverTriplanar(source,uv+shift,weight,mipBias);
+      #endif
+    }
+    vec3 riverReliefSample(sampler2D source,vec2 uv,vec2 shift,vec3 original,float mipBias){
+      #if __VERSION__ >= 300
+        float footprint=exp2(mipBias);
+        vec2 dx=dFdx(uv)*footprint,dy=dFdy(uv)*footprint;
+        if(dot(shift,shift)<1e-10)return original;
+        return texture2DGradEXT(source,uv+shift,dx,dy).rgb;
+      #else
+        return texture2D(source,uv+shift,mipBias).rgb;
+      #endif
+    }
+  `;
   const waterShader=`
     uniform sampler2D riverBankProfile;
     float shoreDistance(vec2 p){
@@ -502,9 +556,18 @@ const riverShore = (() => {
         const footContact=hasContact && !ground?'varying float shoreLocalY;\n':'';
         if(footContact)shader.vertexShader=footContact+shader.vertexShader.replace(
           '#include <begin_vertex>','#include <begin_vertex>\n shoreLocalY=position.y;');
+        const rockSize=rock && pigment?'varying float shoreRockSize;\n':'';
+        if(rockSize)shader.vertexShader=rockSize+shader.vertexShader.replace('#include <begin_vertex>',`
+          #include <begin_vertex>
+          shoreRockSize=1.;
+          #ifdef USE_INSTANCING
+            shoreRockSize=max(length(instanceMatrix[0].xyz),length(instanceMatrix[2].xyz));
+          #endif
+        `);
         shader.fragmentShader=exposure+footContact+'uniform sampler2D shoreLampLookup,shoreLampSources,shoreGrain;\n'
           +(pigment?'uniform sampler2D shorePaint;\n':'')
           +(hasContact?'uniform sampler2D groundContacts;\n':'')
+          +rockSize+(pigment?parallaxShader:'')
           +'uniform vec3 shoreMoon;\n'+shader.fragmentShader.replace(
           '#include <lights_fragment_maps>',`
           #include <lights_fragment_maps>
@@ -569,31 +632,48 @@ const riverShore = (() => {
         if(ground || rock)shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
           #include <color_fragment>
           vec2 terrainUV=riverSurface.xz+riverSurface.y*vec2(.38,.56);
-          vec3 grain=texture2D(shoreGrain,terrainUV*.78).rgb;
-          float microRelief=texture2D(shoreGrain,terrainUV*3.25+vec2(.34,.81)).r;
-          float mineral=texture2D(shoreGrain,terrainUV*.188).g;
-          float wet=1.-smoothstep(.022,.59,riverSurface.y-(${litHeight})+(grain.r-.5)*.30);
-          float moss=smoothstep(.42,.71,mineral+.15*(grain.r-.5))*(1.-wet*.64);
-          diffuseColor.rgb*=mix(.64,1.46,smoothstep(.12,.79,mineral))*mix(.74,1.24,smoothstep(.12,.83,grain.b));
-          diffuseColor.rgb*=mix(vec3(1.),vec3(.65,1.11,.63),moss*.43)*mix(vec3(1.),vec3(.45,.50,.53),wet);
           ${pigment?`
+          vec3 reliefNormal=normalize(vNormal);
+          vec3 shoreRay=riverReliefRay(vViewPosition,reliefNormal,${compact?'15.':'24.'});
+          vec3 shoreOffset=shoreRay*mat3(viewMatrix);
+          const vec3 heightWeights=vec3(.30,.55,.15);
           ${rock?`
-          vec3 axes=abs(inverseTransformDirection(normalize(vNormal),viewMatrix));
+          vec3 axes=abs(inverseTransformDirection(reliefNormal,viewMatrix));
           vec3 weights=pow(axes,vec3(4.));
           weights/=max(.001,weights.x+weights.y+weights.z);
           vec3 stoneUV=riverSurface*1.06;
-          vec3 brush=texture2D(shorePaint,stoneUV.zy).rgb*weights.x
-                   +texture2D(shorePaint,stoneUV.xz).rgb*weights.y
-                   +texture2D(shorePaint,stoneUV.xy).rgb*weights.z;
-          float paintGrain=dot(brush,vec3(.30,.55,.15));
+          vec3 brush=riverTriplanar(shorePaint,stoneUV,weights,0.);
+          float recess=1.-smoothstep(.19,.38,dot(brush,heightWeights));
+          shoreOffset*=.026*recess*smoothstep(.56,.91,shoreRockSize);
+          brush=riverReliefSample(shorePaint,stoneUV,shoreOffset*1.06,weights,brush,0.);
+          `:`
+          vec2 dirtUV=terrainUV*.62;
+          const float dirtMipBias=.9;
+          vec3 brush=texture2D(shorePaint,dirtUV,dirtMipBias).rgb;
+          float dirtHeight=dot(texture2D(shorePaint,dirtUV,2.2).rgb,heightWeights);
+          float recess=1.-smoothstep(.09,.24,dirtHeight);
+          shoreOffset*=.010*recess*smoothstep(-.06,.20,riverSurface.y-(${litHeight}));
+          `}
+          vec2 terrainShift=shoreOffset.xz+shoreOffset.y*vec2(.38,.56);
+          ${ground?'brush=riverReliefSample(shorePaint,dirtUV,terrainShift*.62,brush,dirtMipBias);':''}
+          terrainUV+=terrainShift;
+          float paintGrain=dot(brush,heightWeights);
+          `:`float paintGrain=.46;${ground?'float dirtHeight=paintGrain;':''}`}
+          vec3 grain=texture2D(shoreGrain,terrainUV*.78,${ground?'1.1':'0.'}).rgb;
+          float microRelief=texture2D(shoreGrain,terrainUV*3.25+vec2(.34,.81),${ground?'1.5':'0.'}).r;
+          float mineral=texture2D(shoreGrain,terrainUV*.188).g;
+          float wet=1.-smoothstep(.022,.59,riverSurface.y-(${litHeight})+(grain.r-.5)*.30);
+          float moss=smoothstep(.42,.71,mineral+.15*(grain.r-.5))*(1.-wet*.64);
+          diffuseColor.rgb*=mix(.64,1.46,smoothstep(.12,.79,mineral))
+                           *mix(${ground?'.84,1.16':'.74,1.24'},smoothstep(.12,.83,grain.b));
+          diffuseColor.rgb*=mix(vec3(1.),vec3(.65,1.11,.63),moss*.43)*mix(vec3(1.),vec3(.45,.50,.53),wet);
+          ${pigment?`
+          ${rock?`
           float lichen=smoothstep(.012,.068,brush.g-brush.b+.028*(mineral-.40))*(1.-wet*.76);
           lichen*=mix(.36,1.,smoothstep(.18,.76,axes.y));
           diffuseColor.rgb*=mix(vec3(.44),vec3(1.59),smoothstep(.10,.56,paintGrain))
                            *mix(vec3(1.),vec3(.76,1.16,.57),lichen*.83);`:`
-          vec3 brush=texture2D(shorePaint,terrainUV*.62).rgb;
-          float paintGrain=dot(brush,vec3(.30,.55,.15));
-          diffuseColor.rgb*=clamp(.50+(brush-.13)*3.20,.46,1.75);`}`:`
-          float paintGrain=.46;`}
+          diffuseColor.rgb*=clamp(.57+(brush-.13)*2.65,.52,1.64);`}`:''}
           ${ground?`
           float litter=texture2D(shoreGrain,terrainUV*.283+vec2(.33,.76)).b;
           float carpet=smoothstep(.38,.72,mineral+(grain.r-.5)*.26)*(1.-wet*.75);
@@ -601,15 +681,16 @@ const riverShore = (() => {
           diffuseColor.rgb*=mix(vec3(1.),vec3(.65,1.12,.60),carpet*.57);`:''}
         `).replace('#include <roughnessmap_fragment>',`
           #include <roughnessmap_fragment>
-          roughnessFactor=clamp(roughnessFactor+.30*(grain.g-.5)+.10*(microRelief-.5)
+          roughnessFactor=clamp(roughnessFactor+.30*(grain.g-.5)+${ground?'.045':'.10'}*(microRelief-.5)
             -wet*${rock?'.55':'.30'}${ground?'+.13*carpet-.14*smoothstep(.28,.59,paintGrain)':''},${rock?'.24':'.44'},.98);
         `).replace('#include <normal_fragment_maps>',`
           #include <normal_fragment_maps>
           vec3 dx=dFdx(-vViewPosition),dy=dFdy(-vViewPosition);
           vec3 tx=cross(dy,normal),ty=cross(normal,dx);
-          float det=dot(dx,tx),height=${ground?'.013*grain.r+.014*mineral+.034*paintGrain+.004*microRelief':
+          float det=dot(dx,tx),height=${ground?'.007*grain.r+.011*mineral+.022*dirtHeight+.0015*microRelief':
             '.013*grain.r+.018*mineral+.031*paintGrain+.006*microRelief'};
           vec3 slope=sign(det)*(tx*dFdx(height)+ty*dFdy(height));
+          ${ground?'slope*=min(1.,.31*abs(det)/max(length(slope),1e-7));':''}
           normal=normalize(max(abs(det),1e-7)*normal-slope);
         `);
         if(twoSided && !cards)shader.fragmentShader=shader.fragmentShader.replace('#include <color_fragment>',`
@@ -1147,5 +1228,5 @@ const riverShore = (() => {
     return {updateDetail,setGrassDensity};
   }
 
-  return {center,bankX,channelBounds,clearLanternFlight,waterShader,mistShader,create,landscape};
+  return {center,bankX,channelBounds,clearLanternFlight,waterShader,mistShader,parallaxShader,create,landscape};
 })();
