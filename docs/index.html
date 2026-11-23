@@ -8,19 +8,19 @@
 <meta name="theme-color" content="#171e1a" media="(prefers-color-scheme: dark)">
 <title>The Lead Programmer’s Chair</title>
 <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
-<link rel="stylesheet" href="style.css?v=grass-density">
+<link rel="stylesheet" href="style.css?v=lantern-loading">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
 <script defer src="memorial.js?v=photo-captions"></script>
 <script defer src="desk.js"></script>
 <script defer src="river-walk.js?v=forward-tour"></script>
-<script defer src="river-shore.js?v=glassy-shoreline"></script>
+<script defer src="river-shore.js?v=shoreline-cache"></script>
 <script defer src="river-portrait.js?v=refined-finale"></script>
 <script defer src="river-sounds.js?v=soaked"></script>
 <script defer src="river-audio.js?v=independent-ambience"></script>
 <script defer src="river-gi.js?v=bridge-joins"></script>
 <script defer src="river-shadows.js?v=raster-shadow-full"></script>
-<script defer src="garden.js?v=rebased-grass"></script>
+<script defer src="garden.js?v=lantern-loading"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -56,8 +56,87 @@
   <div class="garden-view" tabindex="0" aria-label="Walkable riverside memorial" aria-describedby="garden-directions"></div>
   <div class="garden-fallback" hidden><img alt=""><img class="fallback-reflection" alt="" aria-hidden="true"><canvas class="fallback-sky" width="520" height="320" aria-hidden="true"></canvas></div>
   <div class="garden-loading" hidden>
-    <span class="garden-loading-indicator" aria-hidden="true"></span>
-    <p id="garden-loading-status" role="status">Loading the memorial…</p>
+    <div class="garden-loading-sky" aria-hidden="true">
+      <span class="garden-loading-stars"></span>
+      <span class="garden-loading-sparkle"></span><span class="garden-loading-sparkle"></span>
+      <span class="garden-loading-distant"></span><span class="garden-loading-distant"></span>
+      <span class="garden-loading-distant"></span>
+    </div>
+    <div class="garden-loading-scene">
+      <svg class="garden-loading-art" viewBox="105 39 460 268" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id="loading-fur" x1="10%" y1="15%" x2="100%" y2="62%">
+            <stop stop-color="#a96336"/><stop offset=".67" stop-color="#d99550"/><stop offset="1" stop-color="#ffe6a8"/>
+          </linearGradient>
+          <linearGradient id="loading-dark" x2="100%" y2="100%">
+            <stop stop-color="#473536"/><stop offset="1" stop-color="#24191b"/>
+          </linearGradient>
+          <radialGradient id="loading-cream" cx="60%" cy="34%" r="69%">
+            <stop stop-color="#fff3df"/><stop offset=".59" stop-color="#d8c6b2"/><stop offset="1" stop-color="#9e8b7d"/>
+          </radialGradient>
+          <linearGradient id="loading-tail" x1="0%" y1="100%" x2="100%" y2="0%">
+            <stop stop-color="#6b3e24"/><stop offset=".45" stop-color="#b3713c"/><stop offset=".72" stop-color="#392829"/><stop offset="1" stop-color="#dda465"/>
+          </linearGradient>
+          <radialGradient id="loading-shadow">
+            <stop stop-color="#060a14" stop-opacity=".76"/><stop offset=".64" stop-color="#080f1e" stop-opacity=".37"/><stop offset="1" stop-color="#080f1e" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="loading-pool">
+            <stop stop-color="#ffd084" stop-opacity=".53"/><stop offset=".48" stop-color="#e59a4a" stop-opacity=".22"/><stop offset="1" stop-color="#e59a4a" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="loading-halo">
+            <stop stop-color="#ffd584" stop-opacity=".55"/><stop offset=".38" stop-color="#f2a246" stop-opacity=".23"/><stop offset=".75" stop-color="#d47d2a" stop-opacity=".05"/><stop offset="1" stop-color="#d47d2a" stop-opacity="0"/>
+          </radialGradient>
+          <radialGradient id="loading-paper" cy="72%" r="64%">
+            <stop stop-color="#fffbe0"/><stop offset=".36" stop-color="#ffe194"/><stop offset=".72" stop-color="#f4a84e"/><stop offset="1" stop-color="#c96f28"/>
+          </radialGradient>
+          <filter id="loading-feather" x="-30%" y="-30%" width="160%" height="160%"><feGaussianBlur stdDeviation="1.7"/></filter>
+          <filter id="loading-rim" x="-50%" y="-50%" width="200%" height="200%">
+            <feGaussianBlur stdDeviation="3" result="halo"/><feMerge><feMergeNode in="halo"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+          <clipPath id="loading-body-shape"><path d="M224 258C216 216 228 176 266 174 306 172 332 204 328 247 325 264 305 270 267 270 237 270 226 266 224 258Z"/></clipPath>
+          <clipPath id="loading-head-shape"><path d="M205 158C205 127 230 108 260 108 292 108 313 128 313 157 313 185 289 203 259 203 228 203 205 186 205 158Z"/></clipPath>
+        </defs>
+        <ellipse cx="238" cy="274" rx="103" ry="20" fill="url(#loading-shadow)"/>
+        <ellipse class="garden-loading-pool" cx="442" cy="273" rx="95" ry="23" fill="url(#loading-pool)"/>
+        <g class="garden-loading-tail">
+          <path d="M294 258C322 262 344 255 348 236 351 222 345 212 339 213 334 214 335 224 333 234 330 245 316 248 294 246Z" fill="url(#loading-tail)"/>
+          <path class="garden-loading-rim" d="M336 253C345 248 349 237 348 225 347 217 343 213 339 213" fill="none" stroke="#ffe5a3" stroke-width="2.7" stroke-linecap="round" filter="url(#loading-rim)"/>
+        </g>
+        <g class="garden-loading-cat">
+          <g clip-path="url(#loading-body-shape)">
+            <path d="M218 170H336V274H218Z" fill="url(#loading-fur)"/>
+            <path d="M276 175C312 176 334 202 330 231 312 238 292 236 280 221 269 207 268 186 276 175Z" fill="url(#loading-dark)" filter="url(#loading-feather)"/>
+            <ellipse cx="254" cy="232" rx="38" ry="42" fill="url(#loading-cream)" filter="url(#loading-feather)"/>
+            <ellipse cx="254" cy="194" rx="36" ry="12" fill="#302026" opacity=".34" filter="url(#loading-feather)"/>
+          </g>
+          <path d="M216 138C213 108 224 86 235 88 245 90 253 108 254 126Z" fill="url(#loading-dark)"/>
+          <path d="M223 130C222 110 229 95 236 96 243 97 248 111 248 125Z" fill="#956457"/>
+          <path d="M268 124C272 100 282 86 293 88 304 90 310 115 304 142Z" fill="url(#loading-fur)"/>
+          <path d="M274 126C277 107 284 96 291 97 298 98 302 115 297 136Z" fill="#cd8b70"/>
+          <g clip-path="url(#loading-head-shape)">
+            <path d="M200 104H316V208H200Z" fill="url(#loading-fur)"/>
+            <path d="M198 104H278C283 124 277 145 266 154 248 168 226 184 200 178Z" fill="url(#loading-dark)" filter="url(#loading-feather)"/>
+            <ellipse cx="257" cy="177" rx="30" ry="25" fill="url(#loading-cream)" filter="url(#loading-feather)"/>
+          </g>
+          <path class="garden-loading-rim" d="M288 89C297 89 306 104 305 134M300 129C317 153 313 182 287 196M296 181C320 193 332 229 325 249 323 255 319 260 315 262" fill="none" stroke="#ffe6a3" stroke-width="3" stroke-linecap="round" filter="url(#loading-rim)"/>
+          <path d="M226 161Q235 169 245 162M269 162Q278 169 288 161" fill="none" stroke="#241719" stroke-width="3.4" stroke-linecap="round"/>
+          <path d="M252 171C252 169 262 169 262 171 262 174 259 177 257 177 255 177 252 174 252 171Z" fill="#b77872"/>
+          <path d="M257 177V181M248 182Q252.5 186.5 257 181 261.5 186.5 266 182" fill="none" stroke="#3a2729" stroke-width="2.1" stroke-linecap="round"/>
+        </g>
+        <ellipse cx="239" cy="264" rx="21.5" ry="10.5" fill="url(#loading-cream)"/>
+        <ellipse cx="276" cy="265" rx="21.5" ry="10.5" fill="url(#loading-cream)"/>
+        <g class="garden-loading-lantern">
+          <circle class="garden-loading-halo" cx="442" cy="183" r="101" fill="url(#loading-halo)"/>
+          <path d="M418 160C418 150 466 150 466 160L460.5 205C459.5 212 424.5 212 423.5 205Z" fill="url(#loading-paper)" filter="url(#loading-rim)"/>
+          <path d="M432 153C429 172 430 192 433 209M452 153C455 172 454 192 451 209M442 152V210" fill="none" stroke="#b85f1b" stroke-width="1" opacity=".31"/>
+          <ellipse cx="442" cy="208" rx="15.5" ry="4.2" fill="#fff7d4" stroke="#b86823" stroke-width="1.5"/>
+          <path d="M428 208H456M442 204V212" stroke="#a85b1b" stroke-width="1" opacity=".65"/>
+          <circle cx="442" cy="207.5" r="2.2" fill="#fff"/>
+        </g>
+      </svg>
+      <p id="garden-loading-status" role="status">Loading the memorial…</p>
+      <div class="garden-loading-progress" role="progressbar" aria-label="Memorial loading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+    </div>
   </div>
   <div class="garden-top">
     <button id="leave-garden" class="garden-pill">← Her desk</button>

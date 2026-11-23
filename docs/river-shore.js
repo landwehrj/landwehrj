@@ -242,10 +242,13 @@ const riverShore = (() => {
   function create(T,waterLevel,random){
     // The water and terrain use the same bank samples, including the coves around decks.
     const bankSamples=new Uint8Array(terrainRows.length*4);
+    const terrain=[[],[]];
     for(let row=0;row<terrainRows.length;row++){
       const z=terrainRows[row];
       for(const side of [-1,1]){
-        const packed=Math.round((bankX(z,side)+halfWidth)*65535/(2*halfWidth));
+        const bank=bankX(z,side);
+        terrain[side>0?1:0].push({bank,heights:offsets.map(offset=>height(z,side,offset))});
+        const packed=Math.round((bank+halfWidth)*65535/(2*halfWidth));
         const index=row*4+side+1;
         bankSamples[index]=packed>>8;
         bankSamples[index+1]=packed&255;
@@ -275,18 +278,19 @@ const riverShore = (() => {
       const upland=foothills+peaks*T.MathUtils.smoothstep(offset,49,155);
       return T.MathUtils.lerp(bank,waterLevel+upland,T.MathUtils.smoothstep(offset,39,83));
     }
-    function ground(z,side,offset){
+    function ground(z,side,offset,bankAtZ=bankX(z,side)){
       // Match the triangles of the visible terrain so roots and stones sit on it.
       const row=T.MathUtils.clamp((z-firstZ)/rowDepth,0,rows);
       const lower=Math.min(rows-1,Math.floor(row)),t=row-lower;
-      const z0=firstZ+lower*rowDepth,z1=z0+rowDepth;
-      const bank=T.MathUtils.lerp(bankX(z0,side),bankX(z1,side),t);
-      const across=T.MathUtils.clamp(offset+side*(bankX(z,side)-bank),offsets[0],offsets[offsets.length-1]);
+      const bankRows=terrain[side>0?1:0];
+      const near=bankRows[outerRows+lower],far=bankRows[outerRows+lower+1];
+      const bank=T.MathUtils.lerp(near.bank,far.bank,t);
+      const across=T.MathUtils.clamp(offset+side*(bankAtZ-bank),offsets[0],offsets[offsets.length-1]);
       const col=Math.max(0,offsets.findIndex(value=>value>=across)-1);
       const from=offsets[col],to=offsets[col+1],u=(across-from)/(to-from);
-      const b=height(z0,side,to),c=height(z1,side,from);
-      if(t+u<=1)return (1-t-u)*height(z0,side,from)+u*b+t*c;
-      return (1-t)*b+(1-u)*c+(t+u-1)*height(z1,side,to);
+      const b=near.heights[col+1],c=far.heights[col];
+      if(t+u<=1)return (1-t-u)*near.heights[col]+u*b+t*c;
+      return (1-t)*b+(1-u)*c+(t+u-1)*far.heights[col+1];
     }
 
     for(const side of [-1,1]){
@@ -317,7 +321,7 @@ const riverShore = (() => {
         }
       }
     }
-    return {ground,height,lanterns,lanternDrift,profile,lighting:bankLighting(T,lanterns,lanternDrift,waterLevel)};
+    return {ground,terrain,lanterns,lanternDrift,profile,lighting:bankLighting(T,lanterns,lanternDrift,waterLevel)};
   }
 
   function plantBuilder(T){
@@ -822,11 +826,12 @@ const riverShore = (() => {
     for(const side of [-1,1]){
       const positions=[],tints=[],index=[];
       const soil=color('#77604d'),grass=color('#55634a'),silt=color('#514943'),upland=color('#4a5345');
+      const bankRows=shore.terrain[side>0?1:0];
       for(let row=0;row<terrainRows.length;row++){
         const z=terrainRows[row];
-        const bank=bankX(z,side);
+        const {bank,heights}=bankRows[row];
         offsets.forEach((offset,i)=>{
-          positions.push(bank+side*offset,shore.height(z,side,offset),z);
+          positions.push(bank+side*offset,heights[i],z);
           const shade=.13+.76*grassPatch(T,z,offset,side);
           const detailed=row>=outerRows && row<=outerRows+rows && i<bankOffsets.length;
           const tint=soil.clone().lerp(grass,shade).lerp(silt,T.MathUtils.clamp(1-offset*.64,0,1))
@@ -958,6 +963,21 @@ const riverShore = (() => {
     const denseGrassMaterial=grassSurface(denseRange);
     const meadowFlowers=['#aba9df','#f5ede0','#ecc56d'].map(tint=>meadowFlower(T,color,tint));
     const placement=new T.Object3D(),bounds=new T.Box3();
+    const shoreRow=z=>Math.floor(z/4);
+    function indexBounds(cells,box,padding=0){
+      for(let row=shoreRow(box.min.z-padding);row<=shoreRow(box.max.z+padding);row++){
+        if(!cells.has(row))cells.set(row,[]);
+        cells.get(row).push(box);
+      }
+    }
+    function nearbyBounds(cells,minZ,maxZ,intersects){
+      for(let row=shoreRow(minZ);row<=shoreRow(maxZ);row++){
+        if(cells.get(row)?.some(intersects))return true;
+      }
+      return false;
+    }
+    const lanternRows=new Map();
+    for(const lamp of shore.lanterns)indexBounds(lanternRows,lamp.bounds);
     function place(geometry,x,y,z,width,height,depth,spin,tilt,submit){
       if(!geometry.boundingBox)geometry.computeBoundingBox();
       placement.position.set(x,y,z);
@@ -966,7 +986,8 @@ const riverShore = (() => {
       placement.updateMatrix();
       bounds.copy(geometry.boundingBox).applyMatrix4(placement.matrix);
       const radius=Math.hypot(Math.max(x-bounds.min.x,bounds.max.x-x),Math.max(z-bounds.min.z,bounds.max.z-z));
-      if(!clearDecks(x,z,radius+.10) || shore.lanterns.some(lamp=>lamp.bounds.intersectsBox(bounds)))return false;
+      if(!clearDecks(x,z,radius+.10) ||
+        nearbyBounds(lanternRows,bounds.min.z,bounds.max.z,box=>box.intersectsBox(bounds)))return false;
       return submit(placement.matrix,bounds)!==false;
     }
     function queueShore(side,z,geometry,parts,matrix,extent,plant){
@@ -994,8 +1015,12 @@ const riverShore = (() => {
     for(const side of [-1,1]){
       const litter=plantBuilder(T);
       const rockFootprints=[],boulderEdges=[];
+      const rockRows=new Map(),grassClearance=.09;
       const footprint=new T.Box3(),rockVertex=new T.Vector3();
-      const floorHeight=(x,z)=>shore.ground(z,side,(x-bankX(z,side))*side);
+      const floorHeight=(x,z)=>{
+        const bank=bankX(z,side);
+        return shore.ground(z,side,(x-bank)*side,bank);
+      };
       function placeRock(geometry,material,x,y,z,width,height,depth,spin,tilt=0){
         return place(geometry,x,y,z,width,height,depth,spin,tilt,matrix=>{
           // Measure the rotated mesh itself so irregular rocks can sit close without crossing.
@@ -1005,15 +1030,17 @@ const riverShore = (() => {
             footprint.expandByPoint(rockVertex.fromBufferAttribute(vertices,i).applyMatrix4(matrix));
           }
           const gap=.025;
-          if(rockFootprints.some(rock=>
+          if(nearbyBounds(rockRows,footprint.min.z,footprint.max.z,rock=>
             footprint.min.x<rock.max.x+gap && footprint.max.x+gap>rock.min.x &&
             footprint.min.z<rock.max.z+gap && footprint.max.z+gap>rock.min.z))return false;
-          rockFootprints.push(footprint.clone());
+          const localBounds=footprint.clone();
+          rockFootprints.push(localBounds);
+          indexBounds(rockRows,localBounds,grassClearance);
           queueShore(side,z,geometry,[[geometry,material]],matrix,footprint);
         });
       }
-      function clearRock(x,z,margin=.09){
-        return !rockFootprints.some(rock=>x>=rock.min.x-margin && x<=rock.max.x+margin &&
+      function clearRock(x,z,margin=grassClearance){
+        return !rockRows.get(shoreRow(z))?.some(rock=>x>=rock.min.x-margin && x<=rock.max.x+margin &&
           z>=rock.min.z-margin && z<=rock.max.z+margin);
       }
       function rememberBoulder(x,z,material){
@@ -1201,11 +1228,11 @@ const riverShore = (() => {
         }
       }
       function plantMeadow(pos,offset,geometry,material,width,height,random=meadowRandom,allowed=true){
-        const x=bankX(pos,side)+side*offset;
+        const bank=bankX(pos,side),x=bank+side*offset;
         if(!clearRock(x,pos))return false;
         const spin=random()*Math.PI*2;
         if(!allowed)return false;
-        const y=floorHeight(x,pos)-.034;
+        const y=shore.ground(pos,side,(x-bank)*side,bank)-.034;
         return placeCover(side,geometry,material,x,y,pos,width,height,width,spin);
       }
       for(const z of patches){

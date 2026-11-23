@@ -96,15 +96,55 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 .garden-view canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}
 .garden-view canvas.photo-hover{cursor:pointer}
 .garden-view canvas:active{cursor:grabbing}
-.garden-loading{position:absolute;inset:0;z-index:2;display:grid;place-content:center;justify-items:center;gap:14px;background:radial-gradient(ellipse at 50% 62%,#142b40,#061022 67%);color:#fff9e9}
+.garden-loading{position:absolute;inset:0;z-index:2;display:grid;place-items:center;overflow:hidden;background:radial-gradient(ellipse at 50% 48%,transparent 34%,#050a1480),linear-gradient(#091326,#101d33 40%,#16243d 68%,#2b3a54);color:#ece2ce}
 .garden-loading[hidden]{display:none}
-.garden-loading p{margin:0;font:italic clamp(22px,4vw,32px)/1.2 var(--serif);text-align:center}
-.garden-loading-indicator{width:28px;height:28px;border:1px solid #bba67450;border-top-color:#e9c58c;border-radius:50%;animation:garden-loading-spin 1.2s linear infinite}
+.garden-loading.is-leaving{opacity:0;visibility:hidden;pointer-events:none;transition:opacity .46s cubic-bezier(.22,1,.36,1),visibility .46s}
+.garden-loading-sky,.garden-loading-stars{position:absolute;inset:0;pointer-events:none}
+.garden-loading-stars{
+  background:
+    radial-gradient(circle at 10% 12%,#f1f6ff9c 0 .8px,transparent 1.8px),
+    radial-gradient(circle at 16% 34%,#e3eeff71 0 .7px,transparent 1.75px),
+    radial-gradient(circle at 25% 11%,#f1f6ff9c 0 .7px,transparent 1.7px),
+    radial-gradient(circle at 31% 29%,#e3eeff71 0 .6px,transparent 1.65px),
+    radial-gradient(circle at 37% 7%,#f1f6ff9c 0 .8px,transparent 1.8px),
+    radial-gradient(circle at 49% 15%,#e3eeff71 0 .9px,transparent 1.9px),
+    radial-gradient(circle at 56% 25%,#f1f6ff9c 0 .8px,transparent 1.8px),
+    radial-gradient(circle at 64% 8%,#e3eeff81 0 .7px,transparent 1.75px),
+    radial-gradient(circle at 71% 24%,#f1f6ff9c 0 .8px,transparent 1.8px),
+    radial-gradient(circle at 83% 15%,#e3eeff71 0 .9px,transparent 1.9px),
+    radial-gradient(circle at 90% 8%,#f1f6ff9c 0 .7px,transparent 1.75px),
+    radial-gradient(circle at 93% 30%,#f1f6ff9c 0 .9px,transparent 1.9px);
+  animation:garden-star-twinkle 5.2s ease-in-out infinite alternate
+}
+.garden-loading-sparkle{position:absolute;left:34%;top:17%;width:9px;height:9px;background:#e2edffc4;clip-path:polygon(50% 0,59% 41%,100% 50%,59% 59%,50% 100%,41% 59%,0 50%,41% 41%);animation:garden-star-twinkle 4.6s ease-in-out infinite alternate}
+.garden-loading-sparkle + .garden-loading-sparkle{left:88%;top:32%;width:7px;height:7px;animation-delay:-2s}
+.garden-loading-distant{position:absolute;left:17%;top:29%;width:21px;height:30px;border-radius:32% 32% 42% 42%;background:radial-gradient(ellipse at 50% 72%,#fff4c4,#e9a650 69%,#b9652e);box-shadow:0 0 26px #f8aa5558;filter:blur(4px);opacity:.57;animation:garden-distant-lantern 26s linear -9s infinite}
+.garden-loading-distant + .garden-loading-distant{left:67%;top:21%;width:14px;height:21px;filter:blur(4px);animation-delay:-19s;animation-duration:34s}
+.garden-loading-distant:last-child{left:78%;top:31%;width:26px;height:36px;filter:blur(3px);animation-delay:-8s;animation-duration:22s}
+.garden-loading-scene{position:relative;display:flex;width:min(91%,550px);flex-direction:column;align-items:center}
+.garden-loading-art{display:block;width:100%;height:auto;max-height:min(53dvh,320px);overflow:visible}
+.garden-loading p{margin:0 0 14px;font:italic clamp(20px,3.6vw,27px)/1.2 var(--serif);letter-spacing:.035em;text-shadow:0 2px 12px #050a14;text-align:center}
+.garden-loading-cat,.garden-loading-tail,.garden-loading-pool,.garden-loading-halo,.garden-loading-lantern{transform-box:fill-box}
+.garden-loading-cat{transform-origin:50% 100%;animation:garden-cat-breath 4.4s ease-in-out infinite}
+.garden-loading-tail{transform-origin:12% 88%;animation:garden-cat-tail 5.4s ease-in-out infinite}
+.garden-loading-lantern{transform-origin:center;animation:garden-lantern-drift 3.8s ease-in-out infinite}
+.garden-loading-pool,.garden-loading-halo{transform-origin:center;animation:garden-lantern-pulse 3.8s ease-in-out infinite}
+.garden-loading-rim{animation:garden-rim-shimmer 3.8s ease-in-out infinite}
+.garden-loading-progress{position:relative;width:min(84vw,310px);height:2px;border-radius:999px;background:linear-gradient(90deg,transparent,#ece2ce32 15%,#ece2ce32 85%,transparent)}
+.garden-loading-progress span{display:block;position:relative;width:var(--loading-progress,0%);height:100%;border-radius:inherit;background:linear-gradient(90deg,#f6bd6800,#f6bd68bb 25%,#ffe9b3 85%,#fff9e2);box-shadow:0 0 9px #f6bd6899;transition:width .23s ease-out}
+.garden-loading-progress span::after{content:"";position:absolute;top:50%;right:-7px;width:14px;height:10px;transform:translateY(-50%);background:radial-gradient(ellipse,#fff8d7ba,#f6bd684c 40%,transparent 73%)}
+.garden-loading-progress[aria-valuenow="0"] span::after{display:none}
 #memorial[aria-busy="true"] .garden-top{z-index:3;background:none}
 #memorial[aria-busy="true"] :is(.garden-top h2,.garden-top-controls){display:none}
 #memorial[aria-busy="true"] .garden-bottom{visibility:hidden}
-@keyframes garden-loading-spin{to{transform:rotate(360deg)}}
-@media(prefers-reduced-motion:reduce){.garden-loading-indicator{animation:none}}
+@keyframes garden-star-twinkle{from{opacity:.34}to{opacity:.9}}
+@keyframes garden-distant-lantern{0%{transform:translate(-4px,12dvh);opacity:0}15%,82%{opacity:.62}100%{transform:translate(8px,-22dvh);opacity:0}}
+@keyframes garden-cat-breath{50%{transform:scale(.994,1.022)}}
+@keyframes garden-cat-tail{0%,100%{transform:rotate(-2.8deg)}50%{transform:rotate(3.2deg)}}
+@keyframes garden-lantern-drift{0%,100%{transform:rotate(-.6deg)}50%{transform:translateY(-8px) rotate(.8deg)}}
+@keyframes garden-lantern-pulse{50%{opacity:.66;transform:scale(1.06)}}
+@keyframes garden-rim-shimmer{50%{opacity:.72}}
+@media(prefers-reduced-motion:reduce){.garden-loading *{animation:none;transition:none}}
 .garden-fallback{display:grid;place-items:center;background:radial-gradient(ellipse at 27% 35%,#163776,transparent 48%),linear-gradient(175deg,#030a18,#102944 52%,#082434 58%,#030b18)}
 .garden-fallback[hidden]{display:none}
 .garden-fallback img{max-width:86vw;max-height:63dvh;padding:8px;background:#e4d9bc;box-shadow:0 12px 40px #0009}

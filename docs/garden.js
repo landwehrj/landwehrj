@@ -4,6 +4,7 @@
   const fallback = dialog.querySelector('.garden-fallback');
   const loadingView=dialog.querySelector('.garden-loading');
   const loadingStatus=dialog.querySelector('#garden-loading-status');
+  const loadingProgress=dialog.querySelector('.garden-loading-progress');
   const fpsLabel=dialog.querySelector('#garden-fps');
   const movement = dialog.querySelector('.garden-movement');
   const walkPanel = dialog.querySelector('.garden-bottom');
@@ -53,7 +54,8 @@
   const walkDirections=directions.textContent;
   const captionEl = document.querySelector('#garden-caption');
   const locationEl = document.querySelector('#garden-count');
-  let current = 0, garden, preparing, opening, frame = 0, previousTime = 0;
+  let current = 0, garden, gardenAssets, preparing, opening, frame = 0, previousTime = 0;
+  let assetProgress=0;
   let fpsFrom=0,fpsFrames=0;
   let visibilityRevision=0;
   let desiredMusic = true, audioAttempt = 0, entrance;
@@ -150,12 +152,28 @@
   dialog.addEventListener('pointerdown',e=>{
     if(!settingsPanel.hidden && !settings.contains(e.target))setSettingsOpen(false);
   });
-  function setLoading(loading){
-    loadingView.hidden=!loading;
+  function setLoadingProgress(progress){
+    loadingProgress.style.setProperty('--loading-progress',progress+'%');
+    loadingProgress.setAttribute('aria-valuenow',String(progress));
+  }
+  function loadingStage(message,progress){
+    loadingStatus.textContent=message;
+    setLoadingProgress(progress);
+  }
+  function setLoading(loading,fade=false){
+    const leaving=!loading && fade && !reduced.matches;
+    loadingView.classList.toggle('is-leaving',leaving);
+    loadingView.hidden=!loading && !leaving;
+    loadingView.inert=!loading;
     dialog.setAttribute('aria-busy',String(loading));
     view.inert=walkPanel.inert=loading;
     settings.inert=loading;
   }
+  loadingView.addEventListener('transitionend',e=>{
+    if(e.target===loadingView && e.propertyName==='opacity' && loadingView.classList.contains('is-leaving')){
+      loadingView.hidden=true;
+    }
+  });
   function nextGardenFrame(signal){
     return new Promise((resolve,reject)=>{
       signal.throwIfAborted();
@@ -3650,7 +3668,7 @@
         }
       }finally{gl.deleteSync(fence);}
     }
-    async function measureGraphics(signal,duration=1050,warmup=350){
+    async function measureGraphics(signal,duration=680,warmup=220){
       let start=await nextGardenFrame(signal),previous=start;
       let revision=visibilityRevision;
       const frames=[];
@@ -3674,7 +3692,7 @@
     }
     const smooth=sample=>sample.mean<=20 && sample.slow<=25;
     async function testViewDistance(signal){
-      loadingStatus.textContent='Testing view distance…';
+      loadingStage('Testing view distance…',77);
       camera.position.set(arrivalDock[0]+.3,1.62,arrivalDock[1]-4.1);
       camera.lookAt(ex,1.5,ez);
       setViewDistance(defaultViewDistance);
@@ -3682,13 +3700,13 @@
       if(smooth(fullRange))return fullRange;
 
       setViewDistance(shortViewDistance);
-      const shortRange=await measureGraphics(signal,750,0);
+      const shortRange=await measureGraphics(signal,480,0);
       signal.throwIfAborted();
       setViewDistance(defaultViewDistance);
       const improves=full=>shortRange.mean<=full.mean*.88 && shortRange.slow<=full.slow;
       if(improves(fullRange)){
         // Recheck at full range after the renderer and GPU have warmed up.
-        fullRange=await measureGraphics(signal,750,0);
+        fullRange=await measureGraphics(signal,480,0);
         if(!smooth(fullRange) && improves(fullRange)){
           setViewDistance(shortViewDistance);
           return shortRange;
@@ -3699,7 +3717,7 @@
     let graphicsSetup,graphicsReady=false;
     async function configureStartupGraphics(signal){
       const stored=savedGraphics();
-      loadingStatus.textContent='Loading shadows…';
+      loadingStage('Loading shadows…',68);
       await applyStartupGraphics(stored || {shadows:3,moving:false,gi:false});
       signal.throwIfAborted();
       if(Number.isFinite(stored?.viewDistance) && !retestViewDistance)return;
@@ -3716,7 +3734,7 @@
         return;
       }
 
-      loadingStatus.textContent='Testing graphics…';
+      loadingStage('Testing graphics…',86);
       if(smooth(baseline)){
         let reference=baseline;
         if(movingLanterns.length){
@@ -3732,12 +3750,12 @@
           }
         }
         if(supportsGI && !giButton.hidden){
-          loadingStatus.textContent='Testing RTGI…';
+          loadingStage('Testing RTGI…',93);
           setGI(true,false);
           if(giUniforms.riverGIEnabled.value){
             // Include several probe refreshes, since a high average can hide
             // hitches on the frames that update the lighting cache.
-            const gi=await measureGraphics(signal,1600);
+            const gi=await measureGraphics(signal,1600,350);
             const limit=T.MathUtils.clamp(reference.worst*1.2,32,44);
             if(!smooth(gi) || gi.worst>limit)setGI(false,false);
           }
@@ -4177,25 +4195,30 @@
     flyButton.hidden=true;
     select(current);
   }
-  function prepare(){
-    if(preparing)return preparing;
+  function loadGardenAssets(){
+    if(gardenAssets)return gardenAssets;
     const textureLoader=new THREE.TextureLoader();
-    const atlasRequest=new Promise((resolve,reject)=>{
+    const atlasData=typeof gardenAtlas!=='undefined'?Promise.resolve(gardenAtlas):new Promise((resolve,reject)=>{
       const script=document.createElement('script');
       script.src='garden-atlas.js';
-      script.onload=()=>resolve(gardenAtlas);
+      script.onload=()=>typeof gardenAtlas==='undefined'
+        ? reject(new Error('Offline photo atlas unavailable')):resolve(gardenAtlas);
       script.onerror=()=>reject(new Error('Offline photo atlas unavailable'));
       document.head.appendChild(script);
-    }).then(async atlas=>({atlas,atlasMap:await textureLoader.loadAsync(atlas.image)}));
+    });
+    const atlasRequest=atlasData.then(async atlas=>({atlas,atlasMap:await textureLoader.loadAsync(atlas.image)}));
     // Poly Haven CC0. The finish maps pack height, roughness and grain.
     const optionalTexture=src=>textureLoader.loadAsync(src).catch(()=>null);
-    const optionalModel=(src,read)=>new Promise(resolve=>{
-      const script=document.createElement('script');
-      script.src=src;
-      script.onload=()=>resolve(read());
-      script.onerror=()=>resolve(null);
-      document.head.appendChild(script);
-    });
+    const optionalModel=(src,read)=>{
+      const existing=read();
+      return existing?Promise.resolve(existing):new Promise(resolve=>{
+        const script=document.createElement('script');
+        script.src=src;
+        script.onload=()=>resolve(read());
+        script.onerror=()=>resolve(null);
+        document.head.appendChild(script);
+      });
+    };
     const barkTextures=name=>Promise.all(['bark','normal','roughness'].map(
       kind=>optionalTexture('materials/ez-tree-'+name+'-'+kind+'.webp')
     )).then(([map,normalMap,roughnessMap])=>({map,normalMap,roughnessMap}));
@@ -4207,7 +4230,7 @@
       barkTextures('pine'),barkTextures('ash')
     ]).then(([presets,pine,ash,aspen,Bark003,Bark001])=>
       presets?{presets,leaves:{pine,ash,aspen},bark:{Bark003,Bark001}}:null);
-    preparing=Promise.all([
+    const requests=[
       atlasRequest,
       location.protocol==='file:'?null:optionalTexture('photos/01.webp'),
       optionalTexture('materials/wood-finish.webp?v=2'),
@@ -4217,8 +4240,30 @@
       optionalTexture('materials/river-forest-floor.webp'),
       optionalTexture('materials/pavilion-timber.webp'),
       landscapeRequest
-    ]).then(([{atlas,atlasMap},finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape])=>{
-      loadingStatus.textContent='Preparing the river…';
+    ];
+    let completed=0;
+    const pending=Promise.all(requests.map(async request=>{
+      const asset=await request;
+      completed++;
+      if(gardenAssets===pending){
+        assetProgress=Math.round(53*completed/requests.length);
+        if(opening && !loadingView.hidden)setLoadingProgress(assetProgress);
+      }
+      return asset;
+    })).catch(error=>{
+      if(gardenAssets===pending){
+        gardenAssets=null;
+        assetProgress=0;
+      }
+      throw error;
+    });
+    gardenAssets=pending;
+    return pending;
+  }
+  function prepare(){
+    if(preparing)return preparing;
+    preparing=loadGardenAssets().then(([{atlas,atlasMap},finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape])=>{
+      loadingStage('Preparing the river…',56);
       garden=makeGarden(atlas,{atlasMap,finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape});
       return garden;
     });
@@ -4229,14 +4274,14 @@
     opening?.abort();
     const session=new AbortController(),{signal}=session;
     opening=session;
-    loadingStatus.textContent='Loading the memorial…';
+    loadingStage('Loading the memorial…',assetProgress);
     setLoading(true);
     dialog.showModal();
     select(0);
-    const musicStarting=playMusic();
-    startAmbience();
-    const soundReady=musicStarting && Promise.race([musicStarting,new Promise(resolve=>setTimeout(resolve,1600))]);
     try{
+      loadGardenAssets().catch(()=>{});
+      playMusic();
+      startAmbience();
       // Give the loading screen a paint before building or drawing the scene.
       await nextGardenFrame(signal);
       await nextGardenFrame(signal);
@@ -4245,11 +4290,11 @@
       instance.resize(false);
       await instance.initialiseGraphics(signal);
       signal.throwIfAborted();
-      loadingStatus.textContent='Opening the memorial…';
+      loadingStage('Opening the memorial…',98);
       instance.resetScene();
-      await soundReady;
       await nextGardenFrame(signal);
-      setLoading(false);
+      setLoadingProgress(100);
+      setLoading(false,true);
       view.focus({preventScroll:true});
     }catch(error){
       if(!signal.aborted)showFallback(error);
@@ -4267,12 +4312,19 @@
       if(dialog.open)dialog.close();
     }
   }
-  document.querySelectorAll('[data-enter-garden]').forEach(link=>link.addEventListener('click',e=>{
-    if(e.button!==0 || e.ctrlKey || e.shiftKey || e.metaKey || e.altKey)return;
-    e.preventDefault();entrance=link;
-    if(location.hash!=='#memorial')history.pushState({lanternGarden:true},'','#memorial');
-    enter();
-  }));
+  function warmMemorial(){
+    if(typeof THREE!=='undefined' && !navigator.connection?.saveData)loadGardenAssets().catch(()=>{});
+  }
+  document.querySelectorAll('[data-enter-garden]').forEach(link=>{
+    link.addEventListener('pointerenter',warmMemorial,{once:true});
+    link.addEventListener('focus',warmMemorial,{once:true});
+    link.addEventListener('click',e=>{
+      if(e.button!==0 || e.ctrlKey || e.shiftKey || e.metaKey || e.altKey)return;
+      e.preventDefault();entrance=link;
+      if(location.hash!=='#memorial')history.pushState({lanternGarden:true},'','#memorial');
+      enter();
+    });
+  });
   dialog.addEventListener('cancel',e=>{
     e.preventDefault();
     if(!settingsPanel.hidden){
