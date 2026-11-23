@@ -27,6 +27,10 @@
   const distanceSetting = distanceControl.closest('.garden-view-distance');
   const distanceValue = distanceSetting.querySelector('output');
   const defaultViewDistance = distanceControl.valueAsNumber;
+  const grassControl = document.querySelector('#garden-grass-density');
+  const grassSetting = grassControl.closest('.garden-grass-density');
+  const grassValue = grassSetting.querySelector('output');
+  const defaultGrassDensity = grassControl.valueAsNumber;
   const shortViewDistance = 160;
   const previewParams=new URLSearchParams(location.search);
   const retestViewDistance = previewParams.get('retest')==='view-distance';
@@ -1393,7 +1397,7 @@
         };
       }
     }
-    const detailShore=riverShore.landscape(T,{
+    const {updateDetail:detailShore,setGrassDensity}=riverShore.landscape(T,{
       scene,reflected,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,
       slate:stonePores,
       paintedStone:photoMaterials.paintedStone,forestFloor:photoMaterials.forestFloor,moonDirection,
@@ -3486,7 +3490,14 @@
     }
     function graphicsSettings(){
       return {shadows:shadowValues?.riverShadowMode.value ?? 0,moving:movingEnabled,
-        gi:Boolean(giUniforms?.riverGIEnabled.value),viewDistance:camera.far};
+        gi:Boolean(giUniforms?.riverGIEnabled.value),viewDistance:camera.far,grassDensity:grassControl.valueAsNumber};
+    }
+    function setGrassSetting(density){
+      grassControl.value=String(Number.isFinite(density)?density:defaultGrassDensity);
+      const label=grassControl.value+'%';
+      grassControl.setAttribute('aria-valuetext',label);
+      grassValue.value=label;
+      setGrassDensity(grassControl.valueAsNumber);
     }
     distanceSetting.hidden=false;
     distanceControl.addEventListener('input',()=>{
@@ -3494,8 +3505,15 @@
       saveGraphics(graphicsSettings());
       resetFPS();
     });
+    grassSetting.hidden=false;
+    grassControl.addEventListener('input',()=>{
+      setGrassSetting(grassControl.valueAsNumber);
+      saveGraphics(graphicsSettings());
+      resetFPS();
+    });
     async function applyStartupGraphics(settings){
       setViewDistance(settings.viewDistance);
+      setGrassSetting(settings.grassDensity);
       if(shadowValues){
         shadowControl.value=String(settings.shadows);
         await changeShadows(false);
@@ -4046,6 +4064,7 @@
     wideShadows.hidden=true;
     if(movingButton)movingButton.hidden=true;
     distanceSetting.hidden=true;
+    grassSetting.hidden=true;
     flyButton.hidden=true;
     select(current);
   }

@@ -8,19 +8,19 @@
 <meta name="theme-color" content="#171e1a" media="(prefers-color-scheme: dark)">
 <title>The Lead Programmer’s Chair</title>
 <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
-<link rel="stylesheet" href="style.css?v=river-flight">
+<link rel="stylesheet" href="style.css?v=grass-density">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
 <script defer src="memorial.js?v=photo-captions"></script>
 <script defer src="desk.js"></script>
 <script defer src="river-walk.js?v=forward-tour"></script>
-<script defer src="river-shore.js?v=hills-shore-profile"></script>
+<script defer src="river-shore.js?v=meadow-density"></script>
 <script defer src="river-portrait.js?v=refined-finale"></script>
 <script defer src="river-sounds.js?v=soaked"></script>
 <script defer src="river-audio.js?v=independent-ambience"></script>
 <script defer src="river-gi.js?v=bridge-joins"></script>
 <script defer src="river-shadows.js?v=raster-shadow-full"></script>
-<script defer src="garden.js?v=full-moving-shadows"></script>
+<script defer src="garden.js?v=meadow-density"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -86,6 +86,11 @@
             <label for="garden-distance">View distance</label>
             <output for="garden-distance" aria-hidden="true">280</output>
             <input id="garden-distance" type="range" min="80" max="280" step="20" value="280">
+          </div>
+          <div class="garden-grass-density garden-pill" hidden>
+            <label for="garden-grass-density">Grass density</label>
+            <output for="garden-grass-density" aria-hidden="true">100%</output>
+            <input id="garden-grass-density" type="range" min="0" max="10000" step="10" value="100" aria-valuetext="100%">
           </div>
           <p class="garden-music-credit">
             Music track: Naturally by Pufino<br>

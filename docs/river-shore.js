@@ -238,20 +238,71 @@ const riverShore = (() => {
     };
   }
 
-  function tuft(T,random,blades,widthScale=1){
-    const plant=plantBuilder(T),triangle=plant.face;
-    for(let i=0;i<blades;i++){
-      const angle=random()*Math.PI*2,dx=Math.cos(angle),dz=Math.sin(angle);
-      const height=.47+.53*random(),lean=.20+random()*.56,width=(.025+random()*.046)*widthScale;
-      const root=random()*.25;
-      const point=(t,w)=>[dx*(root+lean*t*t)-dz*w,height*t,dz*(root+lean*t*t)+dx*w];
-      const a=point(0,-width*.60),b=point(0,width*.60);
-      const c=point(.58,-width),d=point(.58,width),tip=point(1,0);
-      triangle(a,b,c,.44,.44,.74);
-      triangle(b,d,c,.44,.78,.74);
-      triangle(c,d,tip,.74,.78,1);
+  function grassTexture(painted,random){
+    return painted(1024,(ctx,resolution)=>{
+      const tile=resolution/2;
+      for(let patch=0;patch<4;patch++){
+        ctx.save();
+        ctx.translate((patch%2)*tile,Math.floor(patch/2)*tile);
+        ctx.scale(tile,tile);
+        for(let i=0;i<45;i++){
+          const rootX=.5+(random()-.5)*.30,rootY=.967+random()*.020;
+          const bend=(random()-.5)*.79;
+          const height=.23+random()*.68;
+          const tipX=Math.max(.035,Math.min(.965,rootX+bend)),tipY=rootY-height;
+          const firstX=rootX+bend*.08,secondX=rootX+bend*.44;
+          const firstY=rootY-height*.34,secondY=rootY-height*.77;
+          const width=.003+random()*.009;
+          const hue=82+random()*30;
+          const light=(i<18?33:45)+random()*17;
+          const grain=ctx.createLinearGradient(rootX,rootY,tipX,tipY);
+          grain.addColorStop(0,`hsl(${hue-13},27%,19%)`);
+          grain.addColorStop(.36,`hsl(${hue},35%,${light}%)`);
+          grain.addColorStop(.79,`hsl(${hue+4},40%,${light+8}%)`);
+          grain.addColorStop(1,`hsl(${hue-8},34%,${light+13}%)`);
+          ctx.fillStyle=grain;
+          ctx.beginPath();
+          ctx.moveTo(rootX-width*.52,rootY);
+          ctx.bezierCurveTo(firstX-width,firstY,secondX-width*.62,secondY,tipX,tipY);
+          ctx.bezierCurveTo(secondX+width*.32,secondY,firstX+width*.7,firstY,rootX+width*.46,rootY);
+          ctx.closePath();
+          ctx.fill();
+          if(i>=18){
+            ctx.strokeStyle=`hsla(${hue-9},38%,70%,.24)`;
+            ctx.lineWidth=width*.16;
+            ctx.beginPath();
+            ctx.moveTo(rootX,rootY-.02);
+            ctx.bezierCurveTo(firstX,firstY,secondX-width*.16,secondY,tipX,tipY);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
+    });
+  }
+
+  function grassCards(T,tile){
+    const positions=[],uvs=[],indices=[];
+    const u0=tile%2*.5,v0=(1-Math.floor(tile/2))*.5;
+    for(let plane=0;plane<3;plane++){
+      const angle=plane*Math.PI/3;
+      const x=Math.cos(angle)*.56,z=Math.sin(angle)*.56;
+      const start=positions.length/3;
+      for(const y of [0,.53,1]){
+        positions.push(-x,y,-z,x,y,z);
+        uvs.push(u0,v0+y*.5,u0+.5,v0+y*.5);
+      }
+      for(let segment=0;segment<2;segment++){
+        const a=start+segment*2;
+        indices.push(a,a+2,a+1,a+1,a+2,a+3);
+      }
     }
-    return plant.geometry();
+    const geometry=new T.BufferGeometry();
+    geometry.setIndex(indices);
+    geometry.setAttribute('position',new T.Float32BufferAttribute(positions,3));
+    geometry.setAttribute('uv',new T.Float32BufferAttribute(uvs,2));
+    geometry.computeVertexNormals();
+    return geometry;
   }
 
   function reedClump(T,random,blades,upright){
@@ -381,13 +432,14 @@ const riverShore = (() => {
       paint.anisotropy=4;
     }
     const detailEye={value:new T.Vector3()};
-    function surface(tint,{vertexColors=false,twoSided=false,ground=false,rock=false,rim=false,cards=false,rootedTree=false,wind='',finish,lodRange=0}={}){
+    function surface(tint,{vertexColors=false,twoSided=false,ground=false,rock=false,rim=false,cards=false,rootedTree=false,wind='',finish,lodRange=0,coverRange=0}={}){
       const material=new T.MeshStandardMaterial({
         color:color(tint),roughness:twoSided?.72:rock?.78:.86,vertexColors,side:twoSided?T.DoubleSide:T.FrontSide
       });
       const shaderKey=ground?'river-ground':rock?'river-rock':rim?'river-needles':
         rootedTree?'river-pine-bark':'river-understory';
-      material.customProgramCacheKey=()=>shaderKey+(wind?'-'+wind:'')+(finish?'-mapped':'')+(lodRange?'-lod'+lodRange:'');
+      material.customProgramCacheKey=()=>shaderKey+(wind?'-'+wind:'')+(finish?'-mapped':'')
+        +(lodRange?'-lod'+lodRange:'')+(coverRange?'-cover'+coverRange:'');
       if(finish){Object.assign(material,finish);material.roughness=1}
       material.onBeforeCompile=shader=>{
         addRiverMist(shader);
@@ -403,6 +455,10 @@ const riverShore = (() => {
             float pattern=fract(52.9829189*fract(dot(gl_FragCoord.xy,vec2(.06711056,.00583715))));
             if((shoreCoarse>.5)!=(pattern<shoreBlend))discard;
           `);
+        }
+        if(coverRange){
+          shader.uniforms.detailEye=detailEye;
+          shader.vertexShader='uniform vec3 detailEye;\n'+shader.vertexShader;
         }
         if(wind){
           shader.uniforms.bankWindTime=nightTime;
@@ -428,6 +484,10 @@ const riverShore = (() => {
             vec3 axisX=plantFrame[0].xyz,axisZ=plantFrame[2].xyz;
             transformed.x+=dot(windOffset,axisX)/dot(axisX,axisX);
             transformed.z+=dot(windOffset,axisZ)/dot(axisZ,axisZ);
+            ${coverRange?`
+            float grassFade=1.-smoothstep(${(coverRange*.67).toFixed(2)},${coverRange.toFixed(2)},
+              distance(detailEye,plantFrame[3].xyz));
+            transformed*=grassFade;`:''}
           `);
         }
         const hasContact=!rim;
@@ -453,6 +513,9 @@ const riverShore = (() => {
           float openRiver=.52+.48*abs(bankNormal.x);
           irradiance+=mix(vec3(.028,.039,.065),vec3(.143,.195,.307),skyView)*openRiver;
           irradiance+=vec3(.044,.052,.066)*(1.-skyView)*smoothstep(-.9,.43,bankNormal.z);
+          ${coverRange?`
+          float bladeExposure=smoothstep(.10,.82,shoreLocalY);
+          irradiance+=vec3(.22,.30,.36)*bladeExposure;`:''}
           ${rim?`
           float canopyLight=mix(.23,1.,canopyExposure);
           float moonFacing=dot(bankNormal,shoreMoon);
@@ -485,6 +548,7 @@ const riverShore = (() => {
             directLight.visible=true;
             RE_Direct(directLight,geometry,material,reflectedLight);
             irradiance+=vec3(.78,.29,.095)*bankLight;
+            ${coverRange?'irradiance+=vec3(1.36,.69,.28)*bankLight*bladeExposure;':''}
             ${twoSided?`
             float scatter=1.-abs(dot(geometry.normal,directLight.direction));
             irradiance+=vec3(.63,.25,.077)*scatter*scatter*bankLight;`:''}
@@ -653,7 +717,7 @@ const riverShore = (() => {
     }
     const pines=stock?.presets.pines.map(preset=>stockPlant(preset,compact?20:34)).filter(Boolean) ?? [];
     const shrubs=stock?.presets.bushes.map(preset=>stockPlant(preset,compact?9:17,true)).filter(Boolean) ?? [];
-    const shoreChunks=new Map(),detailGroups=[];
+    const shoreChunks=new Map(),detailGroups=[],grassBatches=[];
     const stoneShapes=stock?.presets.rocks.map(readGeometry) ?? Array.from({length:3},(_,i)=>shoreRock(T,i));
     const pebble=shoreRock(T,2,1);
     const stones=['#72736a','#777a75','#797267'].map(tint=>surface(tint,{rock:true}));
@@ -664,15 +728,29 @@ const riverShore = (() => {
     }
     const reeds=reedClump(T,meadowRandom,11,true);
     const rushes=reedClump(T,meadowRandom,9,false);
-    const floorCover=tuft(T,meadowRandom,8,.66);
     const leafFinish={vertexColors:true,twoSided:true,wind:'grass'};
     const grass=surface('#89966b',leafFinish);
     const sedge=surface('#73875e',leafFinish);
-    const sprouts=surface('#88936b',leafFinish);
     const litterMaterial=surface('#685744',{vertexColors:true,twoSided:true});
-    const meadowMaterial=surface('#a6b37b',{vertexColors:true,twoSided:true,wind:'grass'});
     const flowersMaterial=surface('#ffffff',{vertexColors:true,twoSided:true,wind:'grass'});
-    const meadowGrass=[tuft(T,meadowRandom,5,.58),tuft(T,meadowRandom,7,.72)];
+    let coverSeed=58147;
+    function coverRandom(){
+      coverSeed=(Math.imul(coverSeed,1664525)+1013904223)>>>0;
+      return coverSeed/4294967296;
+    }
+    const meadowGrass=Array.from({length:4},(_,i)=>grassCards(T,i));
+    const grassGeometries=new Set(meadowGrass);
+    const coverRange=compact?48:74;
+    const denseRange=compact?30:43;
+    const grassTileSize=7,baseGrassDensity=1000,extraGrassLayers=9;
+    const grassTiles=new Map(),activeGrassTiles=new Set(),rockClearance=new Map();
+    let extraGrassDensity=0;
+    const grassMap=grassTexture(painted,coverRandom);
+    grassMap.anisotropy=2;
+    const grassFinish={map:grassMap,alphaTest:.34,emissive:color('#324629'),emissiveIntensity:.065};
+    const grassSurface=range=>surface('#d4dfbc',{twoSided:true,cards:true,wind:'grass',coverRange:range,finish:grassFinish});
+    const meadowMaterial=grassSurface(coverRange);
+    const denseGrassMaterial=grassSurface(denseRange);
     const meadowFlowers=['#aba9df','#f5ede0','#ecc56d'].map(tint=>meadowFlower(T,color,tint));
     const placement=new T.Object3D(),bounds=new T.Box3();
     function place(geometry,x,y,z,width,height,depth,spin,tilt,submit){
@@ -701,7 +779,7 @@ const riverShore = (() => {
     }
     function placeShrub(index,side,x,y,z,width,height,spin){
       if(shrubs.length)return placePlant(shrubs[index%shrubs.length],side,x,y,z,height,spin);
-      return placeCover(side,floorCover,sprouts,x,y,z,width,height,width,spin);
+      return placeCover(side,meadowGrass[0],meadowMaterial,x,y,z,width,height,width,spin);
     }
     function placeCover(side,geometry,material,x,y,z,width,height,depth,spin){
       return place(geometry,x,y,z,width,height,depth,spin,0,(matrix,extent)=>{
@@ -734,6 +812,7 @@ const riverShore = (() => {
         return !rockFootprints.some(rock=>x>=rock.min.x-margin && x<=rock.max.x+margin &&
           z>=rock.min.z-margin && z<=rock.max.z+margin);
       }
+      rockClearance.set(side,clearRock);
       function dropLitter(x,z){
         if(!clearDecks(x,z,.69))return;
         for(let i=0;i<9;i++){
@@ -819,11 +898,11 @@ const riverShore = (() => {
       for(const {x,z,width,spin,material} of pebbles){
         placeRock(pebble,material,x,floorHeight(x,z),z,width,width*.52,width*.73,spin);
       }
-      function plantMeadow(pos,offset,geometry,material,width,height){
+      function plantMeadow(pos,offset,geometry,material,width,height,random=meadowRandom){
         const x=bankX(pos,side)+side*offset;
         if(!clearRock(x,pos))return;
         const y=floorHeight(x,pos)-.034;
-        placeCover(side,geometry,material,x,y,pos,width,height,width,meadowRandom()*Math.PI*2);
+        placeCover(side,geometry,material,x,y,pos,width,height,width,random()*Math.PI*2);
       }
       for(const z of patches){
         const close=z>-214 && z<36;
@@ -851,7 +930,7 @@ const riverShore = (() => {
           if(!clearRock(x,pos))continue;
           const spread=.56+random()*.61;
           const height=.13+random()*.20,spin=random()*Math.PI*2;
-          if(placeCover(side,floorCover,sprouts,x,shore.ground(pos,side,offset)-.042,pos,
+          if(placeCover(side,meadowGrass[i%meadowGrass.length],meadowMaterial,x,shore.ground(pos,side,offset)-.042,pos,
             spread,height,spread,spin))darkenGround(x,pos,spread*.45,.29,.84,spin);
           if(close && i%2===0)dropLitter(x,pos);
         }
@@ -883,7 +962,23 @@ const riverShore = (() => {
           const pos=lamp.z+(meadowRandom()-.5)*2.4;
           const depth=offset+.47+meadowRandom()*1.5;
           if(i<6)plantMeadow(pos,depth,flower,flowersMaterial,.58+meadowRandom()*.19,.38+meadowRandom()*.24);
-          else plantMeadow(pos,depth,meadowGrass[i%2],meadowMaterial,.42+meadowRandom()*.44,.22+meadowRandom()*.22);
+          else plantMeadow(pos,depth,meadowGrass[i%meadowGrass.length],meadowMaterial,.42+meadowRandom()*.44,.22+meadowRandom()*.22);
+        }
+      }
+      for(const z of patches){
+        const count=z>-218 && z<36?690:315;
+        const inland=6.6+4.2*coverRandom();
+        const uphill=13+7*coverRandom();
+        const nearBank=2.1+coverRandom()*1.8;
+        for(let i=0;i<count;i++){
+          const pos=z+(coverRandom()+coverRandom()-1)*4.8;
+          const band=i%5;
+          const center=band<2?nearBank:band===4?uphill:inland;
+          const offset=center+(coverRandom()+coverRandom()-1)*3.6;
+          if(offset<.65)continue;
+          const width=.28+coverRandom()*.40;
+          const height=.17+coverRandom()*.32;
+          plantMeadow(pos,offset,meadowGrass[i%meadowGrass.length],meadowMaterial,width,height,coverRandom);
         }
       }
       scene.add(reflected(new T.Mesh(litter.geometry(),litterMaterial)));
@@ -901,6 +996,24 @@ const riverShore = (() => {
         }
       }
     }
+    function indexDenseGrass(geometry,matrices){
+      const point=new T.Vector3();
+      for(const matrix of matrices){
+        const {x,y,z}=point.setFromMatrixPosition(matrix);
+        const side=x<center(z)?-1:1;
+        const tileX=Math.floor(x/grassTileSize),tileZ=Math.floor(z/grassTileSize);
+        const key=side+':'+tileX+':'+tileZ;
+        if(!grassTiles.has(key)){
+          const seed=Math.imul(tileX,73856093)^Math.imul(tileZ,19349663)^side;
+          grassTiles.set(key,{bounds:new T.Box3(),anchors:new Map(),side,seed,meshes:null});
+        }
+        const tile=grassTiles.get(key);
+        if(!tile.anchors.has(geometry))tile.anchors.set(geometry,[]);
+        const m=matrix.elements;
+        tile.anchors.get(geometry).push(x,z,Math.hypot(m[0],m[1],m[2]),m[5]);
+        tile.bounds.expandByPoint(point.set(x,y,z));
+      }
+    }
     // Each stretch shares the buffers but has its own culling bounds, padded for wind.
     for(const {parts,matrices,bounds,plant} of shoreChunks.values()){
       const sphere=bounds.getBoundingSphere(new T.Sphere());
@@ -913,6 +1026,16 @@ const riverShore = (() => {
           new Float32Array([Number(coarse)]),1,false,matrices.length));
         geometry.boundingSphere=sphere;
         const mesh=new T.InstancedMesh(geometry,material,matrices.length);
+        if(grassGeometries.has(source)){
+          // A stable shuffled order keeps patches distributed at every density.
+          for(let i=matrices.length-1;i>0;i--){
+            const j=Math.floor(coverRandom()*(i+1));
+            [matrices[i],matrices[j]]=[matrices[j],matrices[i]];
+          }
+          indexDenseGrass(source,matrices);
+          mesh.name='River grass';
+          grassBatches.push(mesh);
+        }
         matrices.forEach((matrix,i)=>mesh.setMatrixAt(i,matrix));
         mesh.frustumCulled=true;
         if(plant)mesh.name=plant.name+(source.hasAttribute('shoreExposure')?' foliage':' bark');
@@ -929,6 +1052,8 @@ const riverShore = (() => {
     }
     function updateDetail(position){
       detailEye.value.copy(position);
+      for(const mesh of grassBatches)updateGrassVisibility(mesh);
+      if(extraGrassDensity>0)updateDenseGrass(position);
       for(const {near,far,anchors,fadeStart,fadeEnd} of detailGroups){
         // Skip a detail level when every instance anchor lies outside its fade range.
         const {min,max}=anchors,{x,y,z}=position;
@@ -941,7 +1066,85 @@ const riverShore = (() => {
         for(const mesh of far)mesh.visible=showFar;
       }
     }
-    return updateDetail;
+    function updateGrassVisibility(mesh){
+      const {center,radius}=mesh.geometry.boundingSphere;
+      mesh.visible=mesh.count>0 && center.distanceToSquared(detailEye.value)<(coverRange+radius)**2;
+    }
+    function makeDenseTile(tile){
+      let seed=tile.seed;
+      function scatter(){
+        seed=(Math.imul(seed,1664525)+1013904223)>>>0;
+        return seed/4294967296;
+      }
+      const clearRock=rockClearance.get(tile.side);
+      tile.meshes=[];
+      for(const [source,anchors] of tile.anchors){
+        const geometry=source.clone();
+        const sphere=tile.bounds.getBoundingSphere(new T.Sphere());
+        sphere.radius+=1.4;
+        geometry.boundingSphere=sphere;
+        const mesh=new T.InstancedMesh(geometry,denseGrassMaterial,anchors.length/4*extraGrassLayers);
+        mesh.name='Dense river grass';
+        mesh.frustumCulled=true;
+        let count=0;
+        for(let layer=0;layer<extraGrassLayers;layer++){
+          for(let i=0;i<anchors.length;i+=4){
+            const baseX=anchors[i],baseZ=anchors[i+1],width=anchors[i+2],height=anchors[i+3];
+            for(let attempt=0;attempt<4;attempt++){
+              const angle=scatter()*Math.PI*2,reach=.10+scatter()*.30;
+              const x=baseX+Math.cos(angle)*reach,z=baseZ+Math.sin(angle)*reach;
+              const offset=(x-bankX(z,tile.side))*tile.side;
+              if(offset<.35 || !clearRock(x,z))continue;
+              const y=shore.ground(z,tile.side,offset)-.034;
+              const spread=width*(.70+scatter()*.47),lift=height*(.77+scatter()*.45);
+              if(place(source,x,y,z,spread,lift,spread,scatter()*Math.PI*2,0,matrix=>{
+                mesh.setMatrixAt(count++,matrix);
+              }))break;
+            }
+          }
+        }
+        tile.meshes.push({mesh,count});
+        scene.add(reflected(mesh));
+      }
+      activeGrassTiles.add(tile);
+    }
+    function releaseDenseTile(tile){
+      for(const {mesh} of tile.meshes){
+        scene.remove(mesh);
+        mesh.geometry.dispose();
+        mesh.dispose();
+      }
+      tile.meshes=null;
+      activeGrassTiles.delete(tile);
+    }
+    function updateDenseGrass(position){
+      let closest=null,distance=denseRange+.8;
+      for(const tile of grassTiles.values()){
+        if(tile.meshes)continue;
+        const reach=tile.bounds.distanceToPoint(position);
+        if(reach<distance){closest=tile;distance=reach}
+      }
+      // Build one nearby tile per frame so dragging to an extreme density stays responsive.
+      if(closest)makeDenseTile(closest);
+      for(const tile of activeGrassTiles){
+        const reach=tile.bounds.distanceToPoint(position);
+        if(reach>denseRange+10){releaseDenseTile(tile);continue}
+        for(const {mesh,count} of tile.meshes){
+          mesh.count=Math.round(count*extraGrassDensity);
+          mesh.visible=mesh.count>0 && reach<denseRange+.8;
+        }
+      }
+    }
+    function setGrassDensity(percent){
+      const base=Math.min(percent/baseGrassDensity,1);
+      extraGrassDensity=Math.max(0,percent/baseGrassDensity-1)/extraGrassLayers;
+      for(const mesh of grassBatches){
+        mesh.count=Math.round(mesh.instanceMatrix.count*base);
+        updateGrassVisibility(mesh);
+      }
+      if(!extraGrassDensity)for(const tile of activeGrassTiles)releaseDenseTile(tile);
+    }
+    return {updateDetail,setGrassDensity};
   }
 
   return {center,bankX,channelBounds,clearLanternFlight,waterShader,mistShader,create,landscape};
