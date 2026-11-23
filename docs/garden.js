@@ -31,6 +31,7 @@
   const grassSetting = grassControl.closest('.garden-grass-density');
   const grassValue = grassSetting.querySelector('output');
   const defaultGrassDensity = grassControl.valueAsNumber;
+  const grassDensityScale = 4;
   const shortViewDistance = 160;
   const previewParams=new URLSearchParams(location.search);
   const retestViewDistance = previewParams.get('retest')==='view-distance';
@@ -142,7 +143,7 @@
   function updateDirections(){
     directions.textContent=flying
       ? touchInput.matches?'Thumbstick to fly · Hold Up or Down · Drag to look'
-        :'WASD or arrows to fly · Space to rise · C to descend · Shift to go faster'
+        :'WASD or ↑/↓ to fly · ←/→ or Q/E to turn · Space to rise · C to descend · Shift to go faster'
       : touchInput.matches?'Thumbstick to move · Drag the scene to look':walkDirections;
   }
   touchInput.addEventListener('change',updateDirections);
@@ -291,6 +292,8 @@
     scene.add(hemi,blueLight,moonRim);
     const reflectionLayer=1;
     const reflected=obj=>{obj.layers.enable(reflectionLayer);return obj};
+    const submergedLayer=2;
+    const submerged=obj=>{obj.layers.enable(submergedLayer);return obj};
     const galleryHeights=[3.5,3.23,4.05,3.65,3.25];
     const supportsGI=Boolean(giButton && renderer.capabilities.isWebGL2 && typeof riverGI!=='undefined');
     const giUniforms=supportsGI?riverGI.uniforms(T):null;
@@ -438,6 +441,12 @@
     const reflectionMatrix=new T.Matrix4(), gaze=new T.Vector3();
     const reflectionClip=[new T.Plane(new T.Vector3(0,1,0),-waterLevel+.018)];
     const reflectionPixel=new T.Vector2();
+    const depthReadable=renderer.capabilities.isWebGL2 || renderer.extensions.has('WEBGL_depth_texture');
+    const submergedDepth=depthReadable?new T.DepthTexture(1,1,T.UnsignedIntType):null;
+    const submergedBuffer=submergedDepth?new T.WebGLRenderTarget(1,1,{depthTexture:submergedDepth}):null;
+    const submergedMaterial=submergedDepth?new T.MeshDepthMaterial({side:T.DoubleSide,colorWrite:false}):null;
+    const submergedClip=[new T.Plane(new T.Vector3(0,-1,0),waterLevel+.003)];
+    const waterScreen={value:new T.Vector2()},waterCamera={value:new T.Vector2()};
     const [ex,ez]=end;
     const overlookEntranceZ=ez+landingDepth/2;
     const boatBerth={x:arrivalDock[0]+2.48,z:entryThresholdZ+2.25};
@@ -474,10 +483,12 @@
     poolView.lookAt(ex,waterLevel,ez-5.6);poolView.updateMatrixWorld();
     const poolMatrix=new T.Matrix4().multiplyMatrices(poolView.projectionMatrix,poolView.matrixWorldInverse);
     const water=new T.Mesh(new T.PlaneGeometry(1500,1500),new T.ShaderMaterial({
+      transparent:true,
       extensions:{derivatives:true},
       uniforms:{...photoUniforms,...horizonUniforms,reflectionPixel:{value:reflectionPixel},poolProjection:{value:poolMatrix},reflectedView:{value:reflection.texture},projection:{value:reflectionMatrix},time:nightTime,
         riverBankProfile:{value:shore.profile},pileWakes:{value:pileWakes},wakeBounds:{value:wakeBounds},moonDirection,
-        boatWaterFrame,portraitLight:{value:0},navy:{value:color('#02060d')}},
+        boatWaterFrame,portraitLight:{value:0},navy:{value:color('#02060d')},
+        submergedDepth:{value:submergedDepth},waterScreen,waterCamera},
       vertexShader:`uniform mat4 projection;varying vec4 reflected;varying vec3 world;
         void main(){vec4 p=modelMatrix*vec4(position,1.);world=p.xyz;reflected=projection*p;
         gl_Position=projectionMatrix*viewMatrix*p;}`,
@@ -491,6 +502,12 @@
         uniform float time,portraitLight;
         uniform vec3 navy,moonDirection;
         uniform vec2 reflectionPixel;
+        ${submergedDepth?`
+        uniform sampler2D submergedDepth;
+        uniform vec2 waterScreen,waterCamera;
+        float waterViewDepth(float depth){
+          return waterCamera.x*waterCamera.y/mix(waterCamera.y,waterCamera.x,depth);
+        }`:''}
         varying vec4 reflected;varying vec3 world;
 
         float lakeHash(vec2 p){return fract(52.9829189*fract(dot(p,vec2(.06711056,.00583715))));}
@@ -528,16 +545,31 @@
           float ripple=dot(p,medium)*7.8-time*.136+bend+.46*sin(swell);
           float crossWave=dot(p,crossing)*6.2+time*.15+1.8*lakeNoise(p*.39+8.);
           float chop=dot(p,fine)*17.7+time*.29+bend*.64;
-          float shimmer=dot(p,capillary)*32.5-time*.88-bend;
+          float shimmer=dot(p,capillary)*44.-time*1.06-bend;
           float rippleCoverage=resolveWave(ripple);
           float midSlope=cos(ripple)*rippleCoverage,crossSlope=cos(crossWave)*resolveWave(crossWave);
           float fineSlope=cos(chop)*resolveWave(chop),capSlope=cos(shimmer)*resolveWave(shimmer);
           vec2 waveSlope=broad*(.023*cos(swell))
             +mix(.22,1.,wind)*(medium*(.053*midSlope)+crossing*(.047*crossSlope)
-                              +fine*(.044*fineSlope)+capillary*(.024*capSlope));
+                              +fine*(.042*fineSlope)+capillary*(.032*capSlope));
 
           float bank=shoreDistance(p);
           float shallows=1.-smoothstep(.05,1.55,bank);
+          ${submergedDepth?`
+          float bottomDepth=texture2D(submergedDepth,gl_FragCoord.xy*waterScreen).r;
+          float surfaceDepth=waterViewDepth(gl_FragCoord.z);
+          // Convert the perspective depth gap along this ray to a vertical depth.
+          float waterDepth=bottomDepth>=1.? .92 :
+            clamp((waterViewDepth(bottomDepth)-surfaceDepth)*ray.y/max(.001,surfaceDepth),0.,.92);
+          `:`
+          float waterDepth=clamp(bank*.35,0.,.92);
+          `}
+          float shoreFade=smoothstep(.003,.18,waterDepth);
+          float depthPhase=waterDepth*38.-time*1.48;
+          float depthBand=smoothstep(.012,.050,waterDepth)*(1.-smoothstep(.085,.23,waterDepth));
+          vec2 depthSlope=gradientAtWater(waterDepth,p);
+          waveSlope+=.025*depthBand*sin(depthPhase)*resolveWave(depthPhase)
+                     *depthSlope/max(length(depthSlope),.22);
           float lapPhase=bank*12.-time*.68+bend*.55;
           float shoreLap=shallows*sin(lapPhase)*resolveWave(lapPhase);
           vec2 wakeUV=(p-wakeBounds.xy)/wakeBounds.zw;
@@ -557,35 +589,38 @@
           float still=portraitLight*(1.-smoothstep(3.,13.,abs(p.x+2.)))*smoothstep(202.,208.,-p.y);
           vec2 uv=.5+.5*reflected.xy/reflected.w;
           vec3 viewSlope=mat3(viewMatrix)*vec3(waveSlope.x,0.,waveSlope.y);
-          vec2 offset=vec2(.048*viewSlope.x,-.30*viewSlope.z)
+          vec2 offset=vec2(.036*viewSlope.x,-.24*viewSlope.z)
                      *mix(1.,.33,grazing)*mix(1.,.21,still);
-          // Stretch the reflected highlights vertically while tightening the distant image.
-          float streak=mix(.0067,.00155,pow(grazing,3.))*mix(.62,1.17,wind);
-          vec2 blur=vec2(reflectionPixel.x*.31,max(reflectionPixel.y*.67,streak));
+          // Keep the lantern core crisp between short vertical ripples.
+          float streak=mix(.0034,.00087,pow(grazing,3.))*mix(.65,1.18,wind);
+          vec2 blur=vec2(reflectionPixel.x*.25,max(reflectionPixel.y*.40,streak));
           vec3 lights=reflectionTaps(uv+offset,blur);
           float warmLight=smoothstep(.035,.22,lights.r-lights.b);
-          float facet=.43*midSlope+.43*crossSlope+.51*fineSlope+.26*capSlope;
-          float shimmerMask=mix(.14,1.28,smoothstep(-.42,.59,facet));
+          float facet=.43*midSlope+.43*crossSlope+.51*fineSlope+.34*capSlope;
+          float shimmerMask=mix(.12,1.33,smoothstep(-.33,.54,facet));
           lights*=mix(1.,shimmerMask,warmLight*(1.-.84*still));
           vec3 normal=normalize(vec3(waveSlope.x,1.,waveSlope.y));
           float noV=max(dot(normal,view),0.);
           float fresnel=.02+.98*pow(1.-noV,5.);
           vec3 skyHalfway=normalize(view+moonDirection);
           float noH=max(dot(normal,skyHalfway),.01);
-          float roughness=mix(.045,.073,wind);
+          float roughness=mix(.031,.057,wind);
           float slopeSq=(1.-noH*noH)/(noH*noH);
           float moonGlint=exp(-slopeSq/(roughness*roughness));
           vec3 skyGlints=vec3(.35,.54,.83)*moonGlint*.52*(1.-.86*still);
-          vec3 silt=vec3(.011,.017,.019);
-          vec3 deepWater=mix(navy,silt,shallows*.20);
+          vec3 silt=vec3(.0072,.0065,.0038);
+          vec3 deepWater=mix(silt,navy,smoothstep(.016,.30,waterDepth));
           vec3 river=mix(deepWater,lights+skyGlints,fresnel);
+          float meniscus=smoothstep(.012,.046,waterDepth)*(1.-smoothstep(.054,.135,waterDepth));
+          river*=1.-.13*meniscus*(1.-still);
           vec2 berthDistance=fromBoat*vec2(.22,.15);
           float berth=exp(-dot(berthDistance,berthDistance));
           float rippleGlints=smoothstep(.80,1.11,.66*midSlope+.39*crossSlope+.24*capSlope);
           float glintBreakup=.46+.54*lakeNoise(p*vec2(.72,1.7));
           river+=vec3(.034,.057,.094)*berth*rippleGlints*glintBreakup*(.037+.40*fresnel);
           float haze=lowRiverMist(cameraPosition,world,${waterLevel.toFixed(2)},time);
-          river=mix(river,vec3(.049,.075,.107),haze*(1.-still));
+          float waterHaze=haze*mix(.15,.56,smoothstep(10.,58.,dist));
+          river=mix(river,vec3(.035,.055,.081),waterHaze*(1.-still));
         if(still>.001){
           vec4 projected=poolProjection*vec4(world,1.);
           vec2 q=projected.xy/projected.w*.5+.5;
@@ -601,11 +636,13 @@
           }
         }
           river=mix(river,navy+vec3(.009,.016,.026),smoothstep(35.,135.,dist)*.38);
-          gl_FragColor=vec4(fadeToHorizon(river,world),1.);
+          gl_FragColor=vec4(fadeToHorizon(river,world),max(shoreFade,still));
         #include <encodings_fragment>
         }`
     }));
-    water.rotation.x=-Math.PI/2;water.position.set(0,waterLevel,-75);scene.add(water);
+    water.rotation.x=-Math.PI/2;water.position.set(0,waterLevel,-75);
+    water.renderOrder=-1;
+    scene.add(water);
     const glowMap=painted(1,(ctx)=>{ctx.fillStyle='#fff';ctx.fillRect(0,0,1,1)});
     function softGlow(material){
       material.onBeforeCompile=shader=>{
@@ -1097,7 +1134,7 @@
           shader.uniforms.riverFixtureTime=nightTime;
           shader.uniforms.riverRoomBounds={value:roomBounds};
           shader.uniforms.riverEaveHeights={value:galleryHeights};
-          shader.fragmentShader=`uniform sampler2D riverFixtures;
+          shader.fragmentShader=(isStone?riverShore.wetBandShader:'')+`uniform sampler2D riverFixtures;
             uniform vec3 riverFixtureColor;
             uniform float riverFixtureTime;
             uniform vec4 riverRoomBounds[${rooms.length}];
@@ -1191,10 +1228,11 @@
             }`
           ).replace('#include <color_fragment>',`
             #include <color_fragment>
+            ${isStone?`float wetness=riverWetBand(riverSurface,${waterLevel.toFixed(2)});`:`
             float waterHeight=riverSurface.y-(${waterLevel.toFixed(2)});
             float wetEdge=.14+.022*sin(riverSurface.x*7.1+riverSurface.z*3.8);
-            float wetness=1.-smoothstep(.022,wetEdge,waterHeight);
-            diffuseColor.rgb*=mix(vec3(1.),vec3(.56,.66,.73),wetness);
+            float wetness=1.-smoothstep(.022,wetEdge,waterHeight);`}
+            diffuseColor.rgb*=mix(vec3(1.),vec3(${isStone?'.52,.55,.56':'.56,.66,.73'}),wetness);
             ${isDeck || isDeckTrim?`
               float dockDamp=(1.-smoothstep(1.7,3.9,abs(riverSurface.z-(${boatBerth.z.toFixed(2)}))))
                 *smoothstep(.61,1.48,riverSurface.x-(${arrivalDock[0].toFixed(2)}))
@@ -1216,7 +1254,7 @@
             `:''}
           `).replace('#include <roughnessmap_fragment>',`
             #include <roughnessmap_fragment>
-            roughnessFactor=mix(roughnessFactor,${isStone?'.39':'.31'},wetness*.74);
+            roughnessFactor=mix(roughnessFactor,${isStone?'.20,wetness':'.31,wetness*.74'});
           `);
           if(castShadows)riverShadows.receive(T,shader,shadowValues,rooms.length);
           if(isPrint || isMat || isFrame){
@@ -1430,7 +1468,7 @@
       }
     }
     const {updateDetail:detailShore,setGrassDensity}=riverShore.landscape(T,{
-      scene,reflected,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,
+      scene,reflected,submerged,color,painted,addRiverMist,shore,waterLevel,random:shoreRandom,
       slate:stonePores,
       paintedStone:photoMaterials.paintedStone,forestFloor:photoMaterials.forestFloor,moonDirection,
       nightTime,stock:photoMaterials.stockLandscape,compact:touchInput.matches
@@ -2727,7 +2765,7 @@
     hull.setAttribute('position',new T.Float32BufferAttribute(hullPositions,3));
     hull.setAttribute('uv',new T.Float32BufferAttribute(hullUV,2));
     hull.setIndex(hullIndices);hull.computeVertexNormals();
-    rowboat.add(reflected(new T.Mesh(hull,[boatPaint,boatInside,boatWood])));
+    rowboat.add(submerged(reflected(new T.Mesh(hull,[boatPaint,boatInside,boatWood]))));
     rowboat.add(reflected(new T.Mesh(new T.TubeGeometry(hullOutline,hullSteps,.024,8,true),boatWood)));
     function hullCrossing(z,ring){
       const stride=hullSteps+1;
@@ -2913,8 +2951,15 @@
       }
       rope.instanceMatrix.needsUpdate=true;
     }
+    const submergedBounds=new T.Box3();
     for(const {geometry,material,matrices} of batches.values()){
       const objects=new T.InstancedMesh(geometry,material,matrices.length);
+      if(submergedBuffer && !material.transparent){
+        if(!geometry.boundingBox)geometry.computeBoundingBox();
+        if(matrices.some(matrix=>submergedBounds.copy(geometry.boundingBox).applyMatrix4(matrix).min.y<waterLevel+.004)){
+          submerged(objects);
+        }
+      }
       matrices.forEach((m,i)=>objects.setMatrixAt(i,m));objects.frustumCulled=false;scene.add(reflected(objects));
     }
 
@@ -3430,7 +3475,29 @@
         saveGraphics(graphicsSettings());
       });
     }
+    function drawSubmergedDepth(){
+      if(!submergedBuffer || camera.position.y<=waterLevel)return;
+      const layers=camera.layers.mask,material=scene.overrideMaterial,clips=renderer.clippingPlanes;
+      const autoClearColor=renderer.autoClearColor,background=scene.background;
+      waterCamera.value.set(camera.near,camera.far);
+      try{
+        camera.layers.set(submergedLayer);
+        scene.overrideMaterial=submergedMaterial;
+        scene.background=null;
+        renderer.autoClearColor=false;
+        renderer.clippingPlanes=submergedClip;
+        renderer.setRenderTarget(submergedBuffer);
+        renderer.render(scene,camera);
+      }finally{
+        camera.layers.mask=layers;
+        scene.overrideMaterial=material;
+        scene.background=background;
+        renderer.autoClearColor=autoClearColor;
+        renderer.clippingPlanes=clips;
+      }
+    }
     function drawWithBloom(){
+      drawSubmergedDepth();
       lightHeight.value=film.height;
       renderer.setRenderTarget(film);
       renderer.render(scene,camera);
@@ -3501,6 +3568,11 @@
       poolMatrix.multiplyMatrices(poolView.projectionMatrix,poolView.matrixWorldInverse);
       renderer.setSize(w,h,false);
       film.setSize(canvas.width,canvas.height);
+      if(submergedBuffer){
+        const scale=Math.min(1,1600/Math.max(film.width,film.height));
+        submergedBuffer.setSize(Math.max(1,Math.round(film.width*scale)),Math.max(1,Math.round(film.height*scale)));
+        waterScreen.value.set(1/film.width,1/film.height);
+      }
       prefilter.uniforms.pixel.value.set(1/film.width,1/film.height);
       const bloomWidth=Math.max(1,Math.floor(film.width/4)),bloomHeight=Math.max(1,Math.floor(film.height/4));
       glowNear.setSize(bloomWidth,bloomHeight);
@@ -3522,14 +3594,15 @@
     }
     function graphicsSettings(){
       return {shadows:shadowValues?.riverShadowMode.value ?? 0,moving:movingEnabled,
-        gi:Boolean(giUniforms?.riverGIEnabled.value),viewDistance:camera.far,grassDensity:grassControl.valueAsNumber};
+        gi:Boolean(giUniforms?.riverGIEnabled.value),viewDistance:camera.far,
+        grassDensity:grassControl.valueAsNumber*grassDensityScale,grassDensityScale};
     }
     function setGrassSetting(density){
       grassControl.value=String(Number.isFinite(density)?density:defaultGrassDensity);
       const label=grassControl.value+'%';
       grassControl.setAttribute('aria-valuetext',label);
       grassValue.value=label;
-      setGrassDensity(grassControl.valueAsNumber);
+      setGrassDensity(grassControl.valueAsNumber*grassDensityScale);
     }
     distanceSetting.hidden=false;
     distanceControl.addEventListener('input',()=>{
@@ -3545,7 +3618,11 @@
     });
     async function applyStartupGraphics(settings){
       setViewDistance(settings.viewDistance);
-      setGrassSetting(settings.grassDensity);
+      // Earlier automatic settings saved 100 at the original density scale.
+      const oldDefault=settings.grassDensityScale===undefined && settings.grassDensity===100;
+      const density=Number.isFinite(settings.grassDensity) && !oldDefault
+        ? settings.grassDensity/grassDensityScale:defaultGrassDensity;
+      setGrassSetting(density);
       if(shadowValues){
         shadowControl.value=String(settings.shadows);
         await changeShadows(false);
@@ -4224,7 +4301,7 @@
     };
   }
   const keys={KeyW:'forward',KeyS:'back',KeyA:'strafeLeft',KeyD:'strafeRight',
-              ArrowUp:'forward',ArrowDown:'back',ArrowLeft:'strafeLeft',ArrowRight:'strafeRight',
+              ArrowUp:'forward',ArrowDown:'back',ArrowLeft:'left',ArrowRight:'right',
               KeyQ:'left',KeyE:'right'};
   dialog.addEventListener('keydown',e=>{
     if(settings.contains(e.target))return;
