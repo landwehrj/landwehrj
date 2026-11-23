@@ -32,8 +32,8 @@
   const retestViewDistance = previewParams.get('retest')==='view-distance';
   const trianglePreview=previewParams.get('renderer')==='realtime-rt';
   const rasterPreview=previewParams.get('renderer')==='raster-shadows';
-  const rasterLayout=!rasterPreview || previewParams.get('shadow-size')==='512'?'standard':
-    previewParams.get('shadow-layout')==='focused'?'focused':'full';
+  const rasterLayout=trianglePreview || (rasterPreview && previewParams.get('shadow-size')==='512')?'standard':
+    rasterPreview && previewParams.get('shadow-layout')==='focused'?'focused':'full';
   const movingShadowLabel=rasterPreview?'Rasterized shadows':trianglePreview?'Triangle shadows':'Moving shadows';
   const graphicsKey='lantern-river.graphics.v1'+(rasterPreview?'.raster':trianglePreview?'.triangle':'');
   const viewer = document.querySelector('#viewer');
@@ -3342,10 +3342,9 @@
             const {triangleShadowSource}=await import('./garden-triangle-shadows.js?v=2');
             triangles=triangleShadowSource(T,scene,architectureMaterials);
           }
-          const matrices=triangles || rasterPreview?[]:architectureBoxes().map(box=>box.matrix);
-          const rasterCasters=rasterPreview?scene.children.filter(object=>object.isMesh &&
-            architectureMaterials.includes(object.material)):null;
-          movingEffect=riverShadows.createMoving(T,renderer,movingValues,matrices,screenMaterial,drawPass,triangles,rasterCasters,rasterLayout);
+          const rasterCasters=trianglePreview?null:scene.children.filter(object=>object.isMesh &&
+            architectureMaterials.includes(object.material));
+          movingEffect=riverShadows.createMoving(T,renderer,movingValues,[],screenMaterial,drawPass,triangles,rasterCasters,rasterLayout);
         }catch(error){
           failMovingShadows(error);
           return;
