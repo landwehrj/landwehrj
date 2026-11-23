@@ -4,7 +4,6 @@
   const fallback = dialog.querySelector('.garden-fallback');
   const loadingView=dialog.querySelector('.garden-loading');
   const loadingStatus=dialog.querySelector('#garden-loading-status');
-  const loadingProgress=dialog.querySelector('.garden-loading-progress');
   const fpsLabel=dialog.querySelector('#garden-fps');
   const movement = dialog.querySelector('.garden-movement');
   const walkPanel = dialog.querySelector('.garden-bottom');
@@ -54,8 +53,7 @@
   const walkDirections=directions.textContent;
   const captionEl = document.querySelector('#garden-caption');
   const locationEl = document.querySelector('#garden-count');
-  let current = 0, garden, gardenAssets, preparing, opening, frame = 0, previousTime = 0;
-  let assetProgress=0;
+  let current = 0, garden, gardenAssets, opening, frame = 0, previousTime = 0;
   let fpsFrom=0,fpsFrames=0;
   let visibilityRevision=0;
   let desiredMusic = true, audioAttempt = 0, entrance;
@@ -126,6 +124,31 @@
     }catch{}
     return null;
   }
+  const defaultStartupGraphics={shadows:3,moving:false,gi:false};
+  const supportsShadows=Boolean(shadowControl && typeof riverShadows!=='undefined');
+  const shadowTextures=new Map();
+  function loadShadowTexture(file,packedDepth=false){
+    if(!shadowTextures.has(file)){
+      const request=new THREE.TextureLoader().loadAsync(file).then(texture=>{
+        if(packedDepth){
+          texture.minFilter=texture.magFilter=THREE.NearestFilter;
+          texture.generateMipmaps=false;
+        }
+        return texture;
+      }).catch(error=>{
+        shadowTextures.delete(file);
+        throw error;
+      });
+      shadowTextures.set(file,request);
+    }
+    return shadowTextures.get(file);
+  }
+  function loadShadowMaps(mode){
+    return Promise.all([
+      loadShadowTexture('river-shadow-mask.png?v=weathered-mooring'),
+      mode>1?loadShadowTexture('river-shadow-depth.png?v=weathered-mooring',true):null
+    ]);
+  }
   function saveGraphics(settings){
     try{localStorage.setItem(graphicsKey,JSON.stringify(settings));}catch{}
   }
@@ -152,14 +175,6 @@
   dialog.addEventListener('pointerdown',e=>{
     if(!settingsPanel.hidden && !settings.contains(e.target))setSettingsOpen(false);
   });
-  function setLoadingProgress(progress){
-    loadingProgress.style.setProperty('--loading-progress',progress+'%');
-    loadingProgress.setAttribute('aria-valuenow',String(progress));
-  }
-  function loadingStage(message,progress){
-    loadingStatus.textContent=message;
-    setLoadingProgress(progress);
-  }
   function setLoading(loading,fade=false){
     const leaving=!loading && fade && !reduced.matches;
     loadingView.classList.toggle('is-leaving',leaving);
@@ -187,6 +202,12 @@
       }
       signal.addEventListener('abort',cancel,{once:true});
     });
+  }
+  async function paintLoadingStage(message,signal){
+    loadingStatus.textContent=message;
+    // Leave a frame to paint the message before synchronous scene or WebGL work.
+    await nextGardenFrame(signal);
+    await nextGardenFrame(signal);
   }
 
   function select(index) {
@@ -315,7 +336,6 @@
     const galleryHeights=[3.5,3.23,4.05,3.65,3.25];
     const supportsGI=Boolean(giButton && renderer.capabilities.isWebGL2 && typeof riverGI!=='undefined');
     const giUniforms=supportsGI?riverGI.uniforms(T):null;
-    const supportsShadows=Boolean(shadowControl && typeof riverShadows!=='undefined');
     const movingValues=movingButton && renderer.capabilities.isWebGL2 && typeof riverShadows!=='undefined'
       && riverShadows.movingUniforms?riverShadows.movingUniforms(T,color('#ffaf73')):null;
     const shadowLamps=[],movingLanterns=[];
@@ -3337,23 +3357,6 @@
       renderer.setRenderTarget(target);
       renderer.render(screen,screenCamera);
     }
-    const shadowTextures=new Map();
-    function loadShadowTexture(file,packedDepth=false){
-      if(!shadowTextures.has(file)){
-        const request=new T.TextureLoader().loadAsync(file).then(texture=>{
-          if(packedDepth){
-            texture.minFilter=texture.magFilter=T.NearestFilter;
-            texture.generateMipmaps=false;
-          }
-          return texture;
-        }).catch(error=>{
-          shadowTextures.delete(file);
-          throw error;
-        });
-        shadowTextures.set(file,request);
-      }
-      return shadowTextures.get(file);
-    }
     let shadowSelection=0;
     function syncShadowPicker(){
       const selected=shadowControl.selectedOptions[0];
@@ -3369,10 +3372,7 @@
       syncShadowPicker();
       try{
         if(mode>0){
-          const [mask,depth]=await Promise.all([
-            loadShadowTexture('river-shadow-mask.png?v=weathered-mooring'),
-            mode>1?loadShadowTexture('river-shadow-depth.png?v=weathered-mooring',true):null
-          ]);
+          const [mask,depth]=await loadShadowMaps(mode);
           if(selection!==shadowSelection)return;
           shadowValues.riverShadowMask.value=mask;
           shadowValues.riverShadowDepth.value=depth;
@@ -3634,7 +3634,7 @@
       saveGraphics(graphicsSettings());
       resetFPS();
     });
-    async function applyStartupGraphics(settings){
+    async function applyStartupGraphics(settings,signal){
       setViewDistance(settings.viewDistance);
       // Earlier automatic settings saved 100 at the original density scale.
       const oldDefault=settings.grassDensityScale===undefined && settings.grassDensity===100;
@@ -3642,10 +3642,19 @@
         ? settings.grassDensity/grassDensityScale:defaultGrassDensity;
       setGrassSetting(density);
       if(shadowValues){
+        if(settings.shadows>0)loadingStatus.textContent='Loading shadows…';
         shadowControl.value=String(settings.shadows);
         await changeShadows(false);
       }
+      signal.throwIfAborted();
+      if(settings.moving && movingLanterns.length){
+        await paintLoadingStage('Preparing lantern shadows…',signal);
+      }
       await setMovingShadows(settings.moving,false);
+      signal.throwIfAborted();
+      if(settings.gi && supportsGI && !giButton.hidden){
+        await paintLoadingStage('Preparing indirect lighting…',signal);
+      }
       setGI(settings.gi,false);
     }
     async function waitForGraphicsFrame(signal){
@@ -3692,7 +3701,7 @@
     }
     const smooth=sample=>sample.mean<=20 && sample.slow<=25;
     async function testViewDistance(signal){
-      loadingStage('Testing view distance…',77);
+      await paintLoadingStage('Testing view distance…',signal);
       camera.position.set(arrivalDock[0]+.3,1.62,arrivalDock[1]-4.1);
       camera.lookAt(ex,1.5,ez);
       setViewDistance(defaultViewDistance);
@@ -3717,8 +3726,8 @@
     let graphicsSetup,graphicsReady=false;
     async function configureStartupGraphics(signal){
       const stored=savedGraphics();
-      loadingStage('Loading shadows…',68);
-      await applyStartupGraphics(stored || {shadows:3,moving:false,gi:false});
+      loadingStatus.textContent='Setting up graphics…';
+      await applyStartupGraphics(stored || defaultStartupGraphics,signal);
       signal.throwIfAborted();
       if(Number.isFinite(stored?.viewDistance) && !retestViewDistance)return;
 
@@ -3734,7 +3743,7 @@
         return;
       }
 
-      loadingStage('Testing graphics…',86);
+      await paintLoadingStage('Testing graphics…',signal);
       if(smooth(baseline)){
         let reference=baseline;
         if(movingLanterns.length){
@@ -3750,7 +3759,7 @@
           }
         }
         if(supportsGI && !giButton.hidden){
-          loadingStage('Testing RTGI…',93);
+          await paintLoadingStage('Testing RTGI…',signal);
           setGI(true,false);
           if(giUniforms.riverGIEnabled.value){
             // Include several probe refreshes, since a high average can hide
@@ -4142,8 +4151,9 @@
         return;
       }
       move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
-    },initialiseGraphics,resetScene(){
+    },initialiseGraphics,async resetScene(signal){
       updateLanterns(0);updateRowboat(nightTime.value);go(0,true);
+      await waitForGraphicsFrame(signal);
     }};
   }
 
@@ -4230,7 +4240,7 @@
       barkTextures('pine'),barkTextures('ash')
     ]).then(([presets,pine,ash,aspen,Bark003,Bark001])=>
       presets?{presets,leaves:{pine,ash,aspen},bark:{Bark003,Bark001}}:null);
-    const requests=[
+    gardenAssets=Promise.all([
       atlasRequest,
       location.protocol==='file:'?null:optionalTexture('photos/01.webp'),
       optionalTexture('materials/wood-finish.webp?v=2'),
@@ -4240,60 +4250,38 @@
       optionalTexture('materials/river-forest-floor.webp'),
       optionalTexture('materials/pavilion-timber.webp'),
       landscapeRequest
-    ];
-    let completed=0;
-    const pending=Promise.all(requests.map(async request=>{
-      const asset=await request;
-      completed++;
-      if(gardenAssets===pending){
-        assetProgress=Math.round(53*completed/requests.length);
-        if(opening && !loadingView.hidden)setLoadingProgress(assetProgress);
-      }
-      return asset;
-    })).catch(error=>{
-      if(gardenAssets===pending){
-        gardenAssets=null;
-        assetProgress=0;
-      }
+    ]).catch(error=>{
+      gardenAssets=null;
       throw error;
     });
-    gardenAssets=pending;
-    return pending;
-  }
-  function prepare(){
-    if(preparing)return preparing;
-    preparing=loadGardenAssets().then(([{atlas,atlasMap},finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape])=>{
-      loadingStage('Preparing the river…',56);
-      garden=makeGarden(atlas,{atlasMap,finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape});
-      return garden;
-    });
-    return preparing;
+    return gardenAssets;
   }
   async function enter(){
     if(dialog.open)return;
     opening?.abort();
     const session=new AbortController(),{signal}=session;
     opening=session;
-    loadingStage('Loading the memorial…',assetProgress);
+    loadingStatus.textContent='Loading the memorial…';
     setLoading(true);
     dialog.showModal();
     select(0);
     try{
-      loadGardenAssets().catch(()=>{});
       playMusic();
       startAmbience();
-      // Give the loading screen a paint before building or drawing the scene.
-      await nextGardenFrame(signal);
-      await nextGardenFrame(signal);
-      const instance=await prepare();
+      if(!garden){
+        const assets=loadGardenAssets();
+        // The shadow maps can download and decode alongside the scene assets.
+        const shadowMode=(savedGraphics() || defaultStartupGraphics).shadows;
+        if(supportsShadows && shadowMode>0)loadShadowMaps(shadowMode).catch(()=>{});
+        const [{atlas,atlasMap},finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape]=await assets;
+        await paintLoadingStage('Preparing the river…',signal);
+        garden=makeGarden(atlas,{atlasMap,finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape});
+      }
+      garden.resize(false);
+      await garden.initialiseGraphics(signal);
+      await paintLoadingStage('Rendering the river…',signal);
+      await garden.resetScene(signal);
       signal.throwIfAborted();
-      instance.resize(false);
-      await instance.initialiseGraphics(signal);
-      signal.throwIfAborted();
-      loadingStage('Opening the memorial…',98);
-      instance.resetScene();
-      await nextGardenFrame(signal);
-      setLoadingProgress(100);
       setLoading(false,true);
       view.focus({preventScroll:true});
     }catch(error){

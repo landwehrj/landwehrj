@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#171e1a" media="(prefers-color-scheme: dark)">
 <title>The Lead Programmer’s Chair</title>
 <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
-<link rel="stylesheet" href="style.css?v=lantern-loading">
+<link rel="stylesheet" href="style.css?v=loader-motion">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
 <script defer src="memorial.js?v=photo-captions"></script>
@@ -20,7 +20,7 @@
 <script defer src="river-audio.js?v=independent-ambience"></script>
 <script defer src="river-gi.js?v=bridge-joins"></script>
 <script defer src="river-shadows.js?v=raster-shadow-full"></script>
-<script defer src="garden.js?v=lantern-loading"></script>
+<script defer src="garden.js?v=loader-motion"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -65,17 +65,23 @@
     <div class="garden-loading-scene">
       <svg class="garden-loading-art" viewBox="105 39 460 268" aria-hidden="true" focusable="false">
         <defs>
-          <linearGradient id="loading-fur" x1="10%" y1="15%" x2="100%" y2="62%">
-            <stop stop-color="#a96336"/><stop offset=".67" stop-color="#d99550"/><stop offset="1" stop-color="#ffe6a8"/>
+          <linearGradient id="loading-tabby" x1="5%" y1="20%" x2="100%" y2="68%">
+            <stop stop-color="#2a2626"/><stop offset=".57" stop-color="#484039"/><stop offset="1" stop-color="#786653"/>
+          </linearGradient>
+          <linearGradient id="loading-russet" x1="10%" y1="15%" x2="100%" y2="62%">
+            <stop stop-color="#79472f"/><stop offset=".67" stop-color="#a96d46"/><stop offset="1" stop-color="#ca9464"/>
           </linearGradient>
           <linearGradient id="loading-dark" x2="100%" y2="100%">
-            <stop stop-color="#473536"/><stop offset="1" stop-color="#24191b"/>
+            <stop stop-color="#39322f"/><stop offset="1" stop-color="#201d1e"/>
           </linearGradient>
           <radialGradient id="loading-cream" cx="60%" cy="34%" r="69%">
-            <stop stop-color="#fff3df"/><stop offset=".59" stop-color="#d8c6b2"/><stop offset="1" stop-color="#9e8b7d"/>
+            <stop stop-color="#fff9ef"/><stop offset=".67" stop-color="#eee7df"/><stop offset="1" stop-color="#b6ada3"/>
+          </radialGradient>
+          <radialGradient id="loading-foreleg-white" cx="57%" cy="71%" r="70%">
+            <stop stop-color="#fbf3e8"/><stop offset=".64" stop-color="#e9dfd4"/><stop offset="1" stop-color="#bcb0a4"/>
           </radialGradient>
           <linearGradient id="loading-tail" x1="0%" y1="100%" x2="100%" y2="0%">
-            <stop stop-color="#6b3e24"/><stop offset=".45" stop-color="#b3713c"/><stop offset=".72" stop-color="#392829"/><stop offset="1" stop-color="#dda465"/>
+            <stop stop-color="#493b31"/><stop offset=".33" stop-color="#8b6647"/><stop offset=".62" stop-color="#58483a"/><stop offset="1" stop-color="#2b2727"/>
           </linearGradient>
           <radialGradient id="loading-shadow">
             <stop stop-color="#060a14" stop-opacity=".76"/><stop offset=".64" stop-color="#080f1e" stop-opacity=".37"/><stop offset="1" stop-color="#080f1e" stop-opacity="0"/>
@@ -100,30 +106,38 @@
         <ellipse class="garden-loading-pool" cx="442" cy="273" rx="95" ry="23" fill="url(#loading-pool)"/>
         <g class="garden-loading-tail">
           <path d="M294 258C322 262 344 255 348 236 351 222 345 212 339 213 334 214 335 224 333 234 330 245 316 248 294 246Z" fill="url(#loading-tail)"/>
-          <path class="garden-loading-rim" d="M336 253C345 248 349 237 348 225 347 217 343 213 339 213" fill="none" stroke="#ffe5a3" stroke-width="2.7" stroke-linecap="round" filter="url(#loading-rim)"/>
+          <path d="M338 215C342 212 346 216 348 222L335 226C336 222 335 217 338 215ZM333 234L349 229 348 239 330 241ZM325 244L337 253 329 257 314 247Z" fill="#2b2423" opacity=".54" filter="url(#loading-feather)"/>
+          <path class="garden-loading-rim" d="M336 253C345 248 349 237 348 225 347 217 343 213 339 213" fill="none" stroke="#e9bc82" stroke-width="2.4" stroke-linecap="round" filter="url(#loading-rim)"/>
         </g>
         <g class="garden-loading-cat">
           <g clip-path="url(#loading-body-shape)">
-            <path d="M218 170H336V274H218Z" fill="url(#loading-fur)"/>
-            <path d="M276 175C312 176 334 202 330 231 312 238 292 236 280 221 269 207 268 186 276 175Z" fill="url(#loading-dark)" filter="url(#loading-feather)"/>
-            <ellipse cx="254" cy="232" rx="38" ry="42" fill="url(#loading-cream)" filter="url(#loading-feather)"/>
-            <ellipse cx="254" cy="194" rx="36" ry="12" fill="#302026" opacity=".34" filter="url(#loading-feather)"/>
+            <path d="M218 170H336V274H218Z" fill="url(#loading-tabby)"/>
+            <path d="M269 174C288 173 310 184 318 197 305 205 295 206 285 218 281 206 273 203 260 199Z" fill="url(#loading-russet)" filter="url(#loading-feather)"/>
+            <path d="M298 241C302 229 317 237 329 224L337 253C323 265 306 274 293 269 299 259 289 253 298 241Z" fill="url(#loading-russet)" filter="url(#loading-feather)"/>
+            <path d="M279 189Q295 202 317 202M288 218Q305 227 330 219M302 241Q317 246 333 240M223 232Q235 235 242 240" fill="none" stroke="#251f20" stroke-width="5.4" stroke-linecap="round" opacity=".49" filter="url(#loading-feather)"/>
+            <path d="M229 201C237 201 242 194 250 193 261 193 264 199 276 197 272 208 275 219 267 225 265 233 256 233 252 242 245 237 247 229 239 227 235 218 230 214 229 201Z" fill="url(#loading-cream)"/>
+            <path d="M261 251C267 248 273 246 280 249 279 259 291 266 290 272H259Z" fill="url(#loading-cream)"/>
+            <path d="M239 200Q252 207 270 200" fill="none" stroke="#60493c" stroke-width="4" opacity=".32" filter="url(#loading-feather)"/>
           </g>
           <path d="M216 138C213 108 224 86 235 88 245 90 253 108 254 126Z" fill="url(#loading-dark)"/>
-          <path d="M223 130C222 110 229 95 236 96 243 97 248 111 248 125Z" fill="#956457"/>
-          <path d="M268 124C272 100 282 86 293 88 304 90 310 115 304 142Z" fill="url(#loading-fur)"/>
-          <path d="M274 126C277 107 284 96 291 97 298 98 302 115 297 136Z" fill="#cd8b70"/>
+          <path d="M223 130C222 110 229 95 236 96 243 97 248 111 248 125Z" fill="#906e66"/>
+          <path d="M268 124C272 100 282 86 293 88 304 90 310 115 304 142Z" fill="url(#loading-tabby)"/>
+          <path d="M274 126C277 107 284 96 291 97 298 98 302 115 297 136Z" fill="#a88172"/>
           <g clip-path="url(#loading-head-shape)">
-            <path d="M200 104H316V208H200Z" fill="url(#loading-fur)"/>
-            <path d="M198 104H278C283 124 277 145 266 154 248 168 226 184 200 178Z" fill="url(#loading-dark)" filter="url(#loading-feather)"/>
-            <ellipse cx="257" cy="177" rx="30" ry="25" fill="url(#loading-cream)" filter="url(#loading-feather)"/>
+            <path d="M200 104H316V208H200Z" fill="url(#loading-tabby)"/>
+            <path d="M249 111C259 114 265 121 263 131 272 136 262 147 259 154 253 151 248 145 247 138 242 132 248 122 249 111Z" fill="url(#loading-russet)" filter="url(#loading-feather)"/>
+            <path d="M273 109C299 115 308 130 312 146 298 138 284 143 273 153 278 139 276 128 269 122Z" fill="#292525" opacity=".56" filter="url(#loading-feather)"/>
+            <path d="M226 119Q237 128 246 144M270 118Q273 131 267 142M208 150Q225 141 243 153M278 148Q290 140 307 146M210 171Q226 178 238 174M283 177Q298 173 308 162" fill="none" stroke="#252020" stroke-width="4.3" stroke-linecap="round" opacity=".53" filter="url(#loading-feather)"/>
+            <path d="M214 154Q225 150 241 159M280 155Q294 149 303 153M282 178Q294 178 300 172" fill="none" stroke="#aa967a" stroke-width="2.8" stroke-linecap="round" opacity=".30" filter="url(#loading-feather)"/>
+            <path d="M256 147C260 152 261 159 264 165 269 169 271 178 278 182 286 186 292 186 300 183 295 193 278 203 261 204 243 204 224 196 216 184 226 189 237 184 243 177 248 172 249 165 253 159Z" fill="url(#loading-cream)"/>
           </g>
-          <path class="garden-loading-rim" d="M288 89C297 89 306 104 305 134M300 129C317 153 313 182 287 196M296 181C320 193 332 229 325 249 323 255 319 260 315 262" fill="none" stroke="#ffe6a3" stroke-width="3" stroke-linecap="round" filter="url(#loading-rim)"/>
+          <path class="garden-loading-rim" d="M288 89C297 89 306 104 305 134M300 129C317 153 313 182 287 196M296 181C320 193 332 229 325 249 323 255 319 260 315 262" fill="none" stroke="#efd39f" stroke-width="2.6" stroke-linecap="round" filter="url(#loading-rim)"/>
           <path d="M226 161Q235 169 245 162M269 162Q278 169 288 161" fill="none" stroke="#241719" stroke-width="3.4" stroke-linecap="round"/>
-          <path d="M252 171C252 169 262 169 262 171 262 174 259 177 257 177 255 177 252 174 252 171Z" fill="#b77872"/>
+          <path d="M252 171C252 169 262 169 262 171 262 174 259 177 257 177 255 177 252 174 252 171Z" fill="#c89691"/>
           <path d="M257 177V181M248 182Q252.5 186.5 257 181 261.5 186.5 266 182" fill="none" stroke="#3a2729" stroke-width="2.1" stroke-linecap="round"/>
         </g>
-        <ellipse cx="239" cy="264" rx="21.5" ry="10.5" fill="url(#loading-cream)"/>
+        <path d="M225 236C229 237 232 233 237 232 241 232 243 234 244 237 243 245 244 250 247 254 252 257 259 259 259 265 259 271 251 274 239 274 228 274 218 271 218 266 218 262 222 258 225 256 228 253 228 249 227 245 226 242 225 239 225 236Z" fill="url(#loading-foreleg-white)"/>
+        <path d="M231 268Q230 266 231 263M238 269Q237 267 238 264" fill="none" stroke="#a69888" stroke-width="1" opacity=".35" stroke-linecap="round"/>
         <ellipse cx="276" cy="265" rx="21.5" ry="10.5" fill="url(#loading-cream)"/>
         <g class="garden-loading-lantern">
           <circle class="garden-loading-halo" cx="442" cy="183" r="101" fill="url(#loading-halo)"/>
@@ -135,7 +149,7 @@
         </g>
       </svg>
       <p id="garden-loading-status" role="status">Loading the memorial…</p>
-      <div class="garden-loading-progress" role="progressbar" aria-label="Memorial loading progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span></span></div>
+      <div class="garden-loading-progress" role="progressbar" aria-label="Loading the memorial"><span></span></div>
     </div>
   </div>
   <div class="garden-top">

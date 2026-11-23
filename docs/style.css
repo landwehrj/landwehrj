@@ -130,10 +130,9 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 .garden-loading-lantern{transform-origin:center;animation:garden-lantern-drift 3.8s ease-in-out infinite}
 .garden-loading-pool,.garden-loading-halo{transform-origin:center;animation:garden-lantern-pulse 3.8s ease-in-out infinite}
 .garden-loading-rim{animation:garden-rim-shimmer 3.8s ease-in-out infinite}
-.garden-loading-progress{position:relative;width:min(84vw,310px);height:2px;border-radius:999px;background:linear-gradient(90deg,transparent,#ece2ce32 15%,#ece2ce32 85%,transparent)}
-.garden-loading-progress span{display:block;position:relative;width:var(--loading-progress,0%);height:100%;border-radius:inherit;background:linear-gradient(90deg,#f6bd6800,#f6bd68bb 25%,#ffe9b3 85%,#fff9e2);box-shadow:0 0 9px #f6bd6899;transition:width .23s ease-out}
-.garden-loading-progress span::after{content:"";position:absolute;top:50%;right:-7px;width:14px;height:10px;transform:translateY(-50%);background:radial-gradient(ellipse,#fff8d7ba,#f6bd684c 40%,transparent 73%)}
-.garden-loading-progress[aria-valuenow="0"] span::after{display:none}
+.garden-loading-progress{position:relative;display:flex;align-items:center;width:min(84vw,310px);height:12px}
+.garden-loading-progress::before{content:"";position:absolute;inset:5px 0;height:2px;background:linear-gradient(90deg,transparent,#ece2ce48 15%,#ece2ce48 85%,transparent)}
+.garden-loading-progress span{position:relative;width:calc(100% / 3);flex:none;height:3px;border-radius:999px;background:linear-gradient(90deg,transparent,#f6bd68 26%,#fff0bc 50%,#f6bd68 74%,transparent);animation:garden-loading-sweep 1.2s linear infinite alternate;will-change:transform}
 #memorial[aria-busy="true"] .garden-top{z-index:3;background:none}
 #memorial[aria-busy="true"] :is(.garden-top h2,.garden-top-controls){display:none}
 #memorial[aria-busy="true"] .garden-bottom{visibility:hidden}
@@ -144,7 +143,11 @@ figcaption{font:18px/1.45 var(--serif);margin:12px 0;min-height:1.5em}
 @keyframes garden-lantern-drift{0%,100%{transform:rotate(-.6deg)}50%{transform:translateY(-8px) rotate(.8deg)}}
 @keyframes garden-lantern-pulse{50%{opacity:.66;transform:scale(1.06)}}
 @keyframes garden-rim-shimmer{50%{opacity:.72}}
-@media(prefers-reduced-motion:reduce){.garden-loading *{animation:none;transition:none}}
+@keyframes garden-loading-sweep{from{transform:translate3d(0,0,0)}to{transform:translate3d(200%,0,0)}}
+@media(prefers-reduced-motion:reduce){
+  .garden-loading *{animation:none;transition:none}
+  .garden-loading-progress span{animation:none;transform:translateX(100%);opacity:.72}
+}
 .garden-fallback{display:grid;place-items:center;background:radial-gradient(ellipse at 27% 35%,#163776,transparent 48%),linear-gradient(175deg,#030a18,#102944 52%,#082434 58%,#030b18)}
 .garden-fallback[hidden]{display:none}
 .garden-fallback img{max-width:86vw;max-height:63dvh;padding:8px;background:#e4d9bc;box-shadow:0 12px 40px #0009}
