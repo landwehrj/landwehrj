@@ -6,11 +6,15 @@ const memorialPhotoDescriptions = [
     'Asleep in her bed beside the desk', 'Curled up on her cat tower', 'Curled up on the computer chair',
     'Looking up from the chair cushion', 'Asleep across the chair, one paw hanging down'
   ];
+const memorialPhotoMemories = new Map(
+  Array.from(document.querySelectorAll('#poems [data-memory-photo]'), verse => [Number(verse.dataset.memoryPhoto), verse])
+);
 (() => {
   const viewer = document.querySelector('#viewer');
   const gallery = document.querySelector('#gallery');
   const poems = document.querySelector('#poems');
   const photo = document.querySelector('#photo');
+  const memory = document.querySelector('#photo-memory');
   const kitten = [4, 5, 6], work = [7, 8, 9, 10, 11, 12, 13, 14], chair = [17, 15, 16];
   const chapters = {
     all: ['Photo album', [...kitten, ...work, 15, 16, 17, 1, 2, 3]],
@@ -30,6 +34,10 @@ const memorialPhotoDescriptions = [
     if (work.includes(id)) caption = 'And years later protecting my computer from all sides...';
     if (chair.includes(id)) caption = 'As an old lady she loved stealing warm computer chairs to become the lead programmer:';
     document.querySelector('#caption').textContent = caption.replace(/:$/, '.');
+    const verse = memorialPhotoMemories.get(id);
+    memory.replaceChildren();
+    if (verse) memory.append(...verse.cloneNode(true).childNodes);
+    memory.hidden = !verse;
     document.querySelector('#count').textContent = (position + 1) + ' / ' + slides.length;
   }
   function step(delta) {

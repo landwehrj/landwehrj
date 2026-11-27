@@ -8,10 +8,10 @@
 <meta name="theme-color" content="#171e1a" media="(prefers-color-scheme: dark)">
 <title>The Lead Programmer’s Chair</title>
 <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
-<link rel="stylesheet" href="style.css?v=loader-motion">
+<link rel="stylesheet" href="style.css?v=notebook-memories">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
-<script defer src="memorial.js?v=photo-captions"></script>
+<script defer src="memorial.js?v=notebook-memories"></script>
 <script defer src="desk.js"></script>
 <script defer src="river-walk.js?v=forward-tour"></script>
 <script defer src="river-shore.js?v=shoreline-cache"></script>
@@ -20,7 +20,7 @@
 <script defer src="river-audio.js?v=independent-ambience"></script>
 <script defer src="river-gi.js?v=bridge-joins"></script>
 <script defer src="river-shadows.js?v=raster-shadow-full"></script>
-<script defer src="garden.js?v=loader-motion"></script>
+<script defer src="garden.js?v=notebook-memories"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -220,12 +220,13 @@
       </div>
     </div>
   </div>
+  <p id="garden-farewell" hidden></p>
   <span id="garden-fps" aria-live="off" hidden></span>
   <audio id="garden-music" loop preload="none" src="naturally-loop.mp3"></audio>
 </dialog>
 <dialog id="viewer" aria-labelledby="dialog-title"><div class="dialoghead"><h2 id="dialog-title"></h2><button class="close" aria-label="Close and return">×</button></div>
-<div id="gallery"><figure><img id="photo" alt=""><figcaption id="caption"></figcaption></figure>
+<div id="gallery"><figure><img id="photo" alt=""><figcaption><span id="caption"></span><blockquote id="photo-memory" hidden></blockquote></figcaption></figure>
 <div class="controls"><button id="previous">← Previous</button><span id="count" aria-live="polite"></span><button id="next">Next →</button></div></div>
-<article id="poems" hidden><section class="verse"><p>Emerald eyes are the color of Spring<br>And a little pink nose beneath<br>The softening folds of snow, ash, and earth mixing<br>In the rivers of soft flowing fur...</p></section><section class="verse"><h3>83 Waking August 7th –</h3><p>Eyes open: intro to the symphony of life<br>Soft cat curled along the feet<br>Warm feelings as we turn<br>The expansive blue; falling sky, our view</p><p>Believe in serenity: blinking eyes dazed<br>Open wide our heart, and closing eyes<br>Falling into the darkness<br>Pillow soft, tucked beneath the sheets</p><p>Content: the landscape of sleep,<br>But waking memories in the celestial blue<br>The sun shines atop the moon<br>Embodying thought: filtering life<br>Before our dreams each morning</p></section><section class="verse"><h3>171 -</h3><p>Cares had drifted<br>From our thoughts<br>If only as lonely<br>They fell into<br>The quiet night</p><p>To let our dreams<br>Float among<br>The easel of darkness<br>Sheltered by blankets<br>Tucked warmly soft</p><p>Around our bodies<br>With murmuring breath<br>Drawing in life<br>From the grace<br>Of our quietness</p><p>Among our eyes<br>We searched still,<br>But we stayed<br>Quietly in each<br>Others’ thoughts</p></section><section class="verse"><h3>201 A May Thursday –</h3><p>Gray clouds stood atop the sky,<br>Whispering with a lonely sigh <br>Of the shaking emerald leaves</p><p>And a night cat set perched<br>Shimmering against the alabaster<br>White all along the stone steps</p><p>In a moment of a cool day,<br>The rain fell, as I held<br>A forest dream; My heart swelled</p><p>With the little frog, slippery <br>And drenched, enclosed beneath <br>My trembling warm hands</p><p>I placed my soul deep into<br>The dreary boundless eyes<br>Forever I was held, wishing goodbye</p></section><p class="closing">February 14, 2006 — July 23, 2026<br><em>Farewell, my friend...</em></p></article>
+<article id="poems" hidden><section class="verse"><p data-memory-photo="16">Emerald eyes are the color of Spring<br>And a little pink nose beneath<br>The softening folds of snow, ash, and earth mixing<br>In the rivers of soft flowing fur...</p></section><section class="verse"><h3>83 Waking August 7th –</h3><p>Eyes open: intro to the symphony of life<br>Soft cat curled along the feet<br>Warm feelings as we turn<br>The expansive blue; falling sky, our view</p><p data-memory-photo="2">Believe in serenity: blinking eyes dazed<br>Open wide our heart, and closing eyes<br>Falling into the darkness<br>Pillow soft, tucked beneath the sheets</p><p data-memory-photo="1">Content: the landscape of sleep,<br>But waking memories in the celestial blue<br>The sun shines atop the moon<br>Embodying thought: filtering life<br>Before our dreams each morning</p></section><section class="verse"><h3>171 -</h3><p>Cares had drifted<br>From our thoughts<br>If only as lonely<br>They fell into<br>The quiet night</p><p data-memory-photo="13">To let our dreams<br>Float among<br>The easel of darkness<br>Sheltered by blankets<br>Tucked warmly soft</p><p>Around our bodies<br>With murmuring breath<br>Drawing in life<br>From the grace<br>Of our quietness</p><p>Among our eyes<br>We searched still,<br>But we stayed<br>Quietly in each<br>Others’ thoughts</p></section><section class="verse"><h3>201 A May Thursday –</h3><p>Gray clouds stood atop the sky,<br>Whispering with a lonely sigh <br>Of the shaking emerald leaves</p><p>And a night cat set perched<br>Shimmering against the alabaster<br>White all along the stone steps</p><p>In a moment of a cool day,<br>The rain fell, as I held<br>A forest dream; My heart swelled</p><p>With the little frog, slippery <br>And drenched, enclosed beneath <br>My trembling warm hands</p><p>I placed my soul deep into<br>The dreary boundless eyes<br>Forever I was held, wishing goodbye</p></section><p class="closing">February 14, 2006 — July 23, 2026<br><em>Farewell, my friend...</em></p></article>
 </dialog>
 </body></html>

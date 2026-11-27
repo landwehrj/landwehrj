@@ -43,6 +43,8 @@
   const graphicsKey='lantern-river.graphics.v1'+(rasterPreview?'.raster':trianglePreview?'.triangle':'');
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
+  const farewell = document.querySelector('#garden-farewell');
+  farewell.textContent = document.querySelector('#poems .closing em').textContent;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
   const {rooms,bridges,route,trail,entrance:arrivalDock,end,landingWidth,landingDepth,lanternSpans,bridgePoint} = riverWalk;
   const order = [...rooms.flatMap(room=>room.photos),1];
@@ -214,6 +216,7 @@
     current = (index + order.length) % order.length;
     const id = order[current], caption = memorialPhotoDescriptions[id-1];
     enlarge.hidden=false;
+    enlarge.textContent=memorialPhotoMemories.has(id)?'Photo & memory':'View photo';
     captionEl.textContent=caption;
     const room=rooms.find(r=>r.photos.includes(id));
     locationEl.textContent=(room?.name || 'The last overlook')+' · '+(current+1)+' / '+order.length;
@@ -3830,6 +3833,7 @@
       const lift=reduced.matches?Number(elapsed>=10):T.MathUtils.smoothstep(elapsed,5.5,12.5);
       const horizonPitch=Math.atan2(waterLevel-poolView.position.y,poolView.position.z-formation.position.z);
       pitch=T.MathUtils.lerp(arrival.pitch,T.MathUtils.lerp(waterPitch,horizonPitch,lift),ease);
+      farewell.hidden=elapsed<12.5 || elapsed>=releaseControlsAt;
       if(elapsed>=releaseControlsAt){
         arrival=null;
         walkPanel.inert=false;
@@ -3947,6 +3951,7 @@
     function go(index,reset=false){
       if(reset){
         arrival=null;walkPanel.inert=Boolean(opening);elapsed=-1;showFinale(-1);
+        farewell.hidden=true;
         if(flying)setFlight(false);
       }
       if(arrival)return;
