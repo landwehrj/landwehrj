@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#171e1a" media="(prefers-color-scheme: dark)">
 <title>The Lead Programmer’s Chair</title>
 <link rel="icon" type="image/png" sizes="64x64" href="favicon.png">
-<link rel="stylesheet" href="style.css?v=notebook-memories">
+<link rel="stylesheet" href="style.css?v=fallback-status">
 <script defer src="vendor/three.min.js"></script>
 <script defer src="coat.js"></script>
 <script defer src="memorial.js?v=notebook-memories"></script>
@@ -20,7 +20,7 @@
 <script defer src="river-audio.js?v=independent-ambience"></script>
 <script defer src="river-gi.js?v=bridge-joins"></script>
 <script defer src="river-shadows.js?v=raster-shadow-full"></script>
-<script defer src="garden.js?v=notebook-memories"></script>
+<script defer src="garden.js?v=stable-startup"></script>
 </head>
 <body>
 <header><div class="navwrap"><a class="wordmark" href="#desk"><span class="paw" aria-hidden="true"><i></i><i></i><i></i><i></i><b></b></span> Her desk</a>
@@ -54,7 +54,7 @@
 <footer><em>Farewell, my friend...</em><span>2006 — 2026</span></footer>
 <dialog id="memorial" aria-labelledby="garden-title">
   <div class="garden-view" tabindex="0" aria-label="Walkable riverside memorial" aria-describedby="garden-directions"></div>
-  <div class="garden-fallback" hidden><img alt=""><img class="fallback-reflection" alt="" aria-hidden="true"><canvas class="fallback-sky" width="520" height="320" aria-hidden="true"></canvas></div>
+  <div class="garden-fallback" hidden><img alt=""><img class="fallback-reflection" alt="" aria-hidden="true"><canvas class="fallback-sky" width="520" height="320" aria-hidden="true"></canvas><span class="fallback-lantern" aria-hidden="true" hidden></span><p id="garden-fallback-status" role="status"></p></div>
   <div class="garden-loading" hidden>
     <div class="garden-loading-sky" aria-hidden="true">
       <span class="garden-loading-stars"></span>
@@ -150,6 +150,14 @@
       </svg>
       <p id="garden-loading-status" role="status">Loading the memorial…</p>
       <div class="garden-loading-progress" role="progressbar" aria-label="Loading the memorial"><span></span></div>
+      <p id="garden-loading-detail"></p>
+      <dl class="garden-loading-assets" aria-label="Scene files" hidden>
+        <div data-loading-group="photos" hidden><dt>Photos</dt><dd></dd></div>
+        <div data-loading-group="surfaces" hidden><dt>Wood, stone and terrain textures</dt><dd></dd></div>
+        <div data-loading-group="foliage" hidden><dt>Trees and foliage</dt><dd></dd></div>
+        <div data-loading-group="shadows" hidden><dt>Shadow maps</dt><dd></dd></div>
+      </dl>
+      <p id="garden-loading-time" aria-hidden="true"></p>
     </div>
   </div>
   <div class="garden-top">
@@ -195,6 +203,8 @@
     </div>
   </div>
   <div class="garden-bottom">
+    <button id="garden-release" class="garden-pill" type="button" hidden>Release a lantern</button>
+    <span id="garden-release-status" role="status"></span>
     <div class="garden-caption">
       <p id="garden-count"></p>
       <h3 id="garden-caption"></h3>
@@ -206,7 +216,7 @@
     </div>
     <div class="garden-thumbstick" aria-hidden="true"><span></span></div>
     <div class="garden-movement">
-      <button class="garden-pill" id="garden-guide" aria-pressed="false">Follow the river</button>
+      <button class="garden-pill" id="garden-guide" type="button" aria-pressed="false" title="Take a guided walk past the photographs">Follow the river</button>
       <p id="garden-directions">WASD or ↑/↓ to move · ←/→ or Q/E to turn · Shift to run · Drag to look</p>
       <div class="garden-flight-pad" aria-label="Flight altitude controls">
         <button type="button" class="garden-pill" data-walk="ascend" aria-label="Fly up">↑ Up</button>

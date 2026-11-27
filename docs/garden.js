@@ -2,8 +2,16 @@
   const dialog = document.querySelector('#memorial');
   const view = dialog.querySelector('.garden-view');
   const fallback = dialog.querySelector('.garden-fallback');
+  const fallbackStatus=fallback.querySelector('#garden-fallback-status');
   const loadingView=dialog.querySelector('.garden-loading');
   const loadingStatus=dialog.querySelector('#garden-loading-status');
+  const loadingDetail=dialog.querySelector('#garden-loading-detail');
+  const loadingTime=dialog.querySelector('#garden-loading-time');
+  const loadingProgress=loadingView.querySelector('.garden-loading-progress');
+  const loadingAssets=loadingView.querySelector('.garden-loading-assets');
+  const assetGroups=new Map(Array.from(loadingAssets.children,row=>[
+    row.dataset.loadingGroup,{row,count:row.querySelector('dd'),files:new Map()}
+  ]));
   const fpsLabel=dialog.querySelector('#garden-fps');
   const movement = dialog.querySelector('.garden-movement');
   const walkPanel = dialog.querySelector('.garden-bottom');
@@ -43,6 +51,9 @@
   const graphicsKey='lantern-river.graphics.v1'+(rasterPreview?'.raster':trianglePreview?'.triangle':'');
   const viewer = document.querySelector('#viewer');
   const enlarge = document.querySelector('#garden-enlarge');
+  const releaseButton=dialog.querySelector('#garden-release');
+  const releaseStatus=dialog.querySelector('#garden-release-status');
+  const fallbackLantern=fallback.querySelector('.fallback-lantern');
   const farewell = document.querySelector('#garden-farewell');
   farewell.textContent = document.querySelector('#poems .closing em').textContent;
   const reduced = matchMedia('(prefers-reduced-motion: reduce)');
@@ -59,6 +70,18 @@
   let fpsFrom=0,fpsFrames=0;
   let visibilityRevision=0;
   let desiredMusic = true, audioAttempt = 0, entrance;
+  let lanternReleased=false;
+  let fallbackRippleFrame=0;
+  const portraitArrival={x:.92,y:.82};
+  const portraitRippleDuration=3.6;
+  const portraitRippleDelays=riverPortrait.lights.map(light=>Math.hypot(
+    1.3*(light.x/riverPortrait.width-portraitArrival.x),light.y/riverPortrait.height-portraitArrival.y
+  )*1.9);
+  const lanternAtArrival=riverPortrait.lights[portraitRippleDelays.indexOf(Math.min(...portraitRippleDelays))];
+  function portraitRipple(index,time){
+    const phase=(time-portraitRippleDelays[index])/.9;
+    return phase>0 && phase<1?Math.sin(phase*Math.PI)**2:0;
+  }
   const held = new Map();
   let fastWalk=false,flying=false;
   let stickPointer=null,stickRight=0,stickForward=0,wide=false;
@@ -128,6 +151,25 @@
   }
   const defaultStartupGraphics={shadows:3,moving:false,gi:false};
   const supportsShadows=Boolean(shadowControl && typeof riverShadows!=='undefined');
+  function trackLoadingAsset(group,file,request){
+    const {row,count,files}=assetGroups.get(group);
+    function update(state){
+      files.set(file,state);
+      const states=Array.from(files.values());
+      const ready=states.filter(value=>value==='ready').length;
+      const unavailable=states.filter(value=>value==='unavailable').length;
+      count.textContent=ready+' / '+states.length+(unavailable?' · '+unavailable+' unavailable':'');
+    }
+    row.hidden=false;
+    update('pending');
+    return request.then(asset=>{
+      update(asset?'ready':'unavailable');
+      return asset;
+    },error=>{
+      update('unavailable');
+      throw error;
+    });
+  }
   const shadowTextures=new Map();
   function loadShadowTexture(file,packedDepth=false){
     if(!shadowTextures.has(file)){
@@ -141,7 +183,7 @@
         shadowTextures.delete(file);
         throw error;
       });
-      shadowTextures.set(file,request);
+      shadowTextures.set(file,trackLoadingAsset('shadows',file,request));
     }
     return shadowTextures.get(file);
   }
@@ -177,7 +219,40 @@
   dialog.addEventListener('pointerdown',e=>{
     if(!settingsPanel.hidden && !settings.contains(e.target))setSettingsOpen(false);
   });
+  let loadingStarted=0,loadingStageStarted=0,loadingClock;
+  function updateLoadingTime(){
+    const now=performance.now();
+    const seconds=since=>Math.floor((now-since)/1000);
+    loadingTime.textContent=seconds(loadingStageStarted)+' s on this step · '+seconds(loadingStarted)+' s total';
+  }
+  function setLoadingStage(message,detail){
+    loadingStageStarted=performance.now();
+    loadingDetail.textContent=detail;
+    loadingStatus.textContent=message;
+    loadingProgress.removeAttribute('aria-valuenow');
+    loadingProgress.removeAttribute('aria-valuetext');
+    loadingProgress.setAttribute('aria-label','Loading the memorial');
+    updateLoadingTime();
+  }
+  function setShaderProgress(prepared,total){
+    const percent=Math.round(100*prepared/total);
+    const detail=prepared+' / '+total+' shader groups prepared';
+    loadingDetail.textContent=detail;
+    loadingProgress.setAttribute('aria-label','Preparing graphics shaders');
+    loadingProgress.setAttribute('aria-valuenow',String(percent));
+    loadingProgress.setAttribute('aria-valuetext',detail);
+    loadingProgress.style.setProperty('--shader-progress',percent+'%');
+    updateLoadingTime();
+  }
   function setLoading(loading,fade=false){
+    clearInterval(loadingClock);
+    if(loading){
+      loadingStarted=loadingStageStarted=performance.now();
+      loadingClock=setInterval(updateLoadingTime,1000);
+    }else if(loadingStarted){
+      updateLoadingTime();
+      loadingStarted=0;
+    }
     const leaving=!loading && fade && !reduced.matches;
     loadingView.classList.toggle('is-leaving',leaving);
     loadingView.hidden=!loading && !leaving;
@@ -205,8 +280,9 @@
       signal.addEventListener('abort',cancel,{once:true});
     });
   }
-  async function paintLoadingStage(message,signal){
-    loadingStatus.textContent=message;
+  async function paintLoadingStage(message,detail,signal){
+    signal.throwIfAborted();
+    setLoadingStage(message,detail);
     // Leave a frame to paint the message before synchronous scene or WebGL work.
     await nextGardenFrame(signal);
     await nextGardenFrame(signal);
@@ -227,23 +303,40 @@
       image.alt = caption;
       if(id===1)fallback.querySelector('.fallback-reflection').src=image.src;
       fallback.classList.toggle('overlook',id===1);
+      releaseButton.hidden=id!==1 || lanternReleased;
       if(id===1)drawFallbackSky();
     }
   }
 
-  function drawFallbackSky(){
+  function drawFallbackSky(rippleTime=-1){
     const canvas=fallback.querySelector('canvas'), ctx=canvas.getContext('2d');
     ctx.clearRect(0,0,canvas.width,canvas.height);
-    fallback.style.setProperty('--fur-matte','url('+riverPortrait.mask.toDataURL()+')');
-    ctx.shadowColor='#ffb877';ctx.shadowBlur=5;
-    for(const light of riverPortrait.lights){
-      ctx.globalAlpha=.36+light.size*1.9;
-      ctx.fillStyle=light.phase<2?'#fff0ca':'#f4af65';
-      ctx.beginPath();
-      ctx.ellipse(light.x/600*canvas.width,light.y/450*canvas.height,light.size*5,light.size*7,0,0,fullTurn);
-      ctx.fill();
+    if(!fallback.style.getPropertyValue('--fur-matte')){
+      fallback.style.setProperty('--fur-matte','url('+riverPortrait.mask.toDataURL()+')');
     }
+    ctx.shadowColor='#ffb877';
+    riverPortrait.lights.forEach((light,index)=>{
+      const glow=portraitRipple(index,rippleTime);
+      ctx.shadowBlur=5+11*glow;
+      ctx.globalAlpha=Math.min(1,.36+light.size*1.9+.4*glow);
+      ctx.fillStyle=glow>.25 || light.phase<2?'#fff0ca':'#f4af65';
+      ctx.beginPath();
+      const size=light.size*(1+.36*glow);
+      ctx.ellipse(light.x/riverPortrait.width*canvas.width,light.y/riverPortrait.height*canvas.height,size*5,size*7,0,0,fullTurn);
+      ctx.fill();
+    });
     ctx.globalAlpha=1;
+  }
+  function startFallbackRipple(){
+    if(reduced.matches)return;
+    // The CSS lantern reaches its destination at 78% of its nine-second flight.
+    const arrival=performance.now()+7020;
+    function tick(now){
+      const age=(now-arrival)/1000;
+      if(age>=0 && fallback.classList.contains('overlook'))drawFallbackSky(reduced.matches?-1:age);
+      if(age<portraitRippleDuration && !reduced.matches)fallbackRippleFrame=requestAnimationFrame(tick);
+    }
+    fallbackRippleFrame=requestAnimationFrame(tick);
   }
 
   function audioLabel() {
@@ -331,9 +424,11 @@
     const moonDirection={value:blueLight.position.clone().sub(blueLight.target.position).normalize()};
     const moonRim=new T.DirectionalLight(color('#83aee7'),.42);
     moonRim.position.set(-27,9,32);
-    scene.add(hemi,blueLight,moonRim);
     const reflectionLayer=1;
     const reflected=obj=>{obj.layers.enable(reflectionLayer);return obj};
+    const sceneLights=[hemi,blueLight,moonRim];
+    const lightLevels=sceneLights.map(light=>light.intensity);
+    scene.add(...sceneLights.map(reflected));
     const submergedLayer=2;
     const submerged=obj=>{obj.layers.enable(submergedLayer);return obj};
     const galleryHeights=[3.5,3.23,4.05,3.65,3.25];
@@ -480,7 +575,8 @@
     reflection.texture.encoding=T.LinearEncoding;
     const mirror=new T.PerspectiveCamera();mirror.layers.set(reflectionLayer);
     const reflectionMatrix=new T.Matrix4(), gaze=new T.Vector3();
-    const reflectionClip=[new T.Plane(new T.Vector3(0,1,0),-waterLevel+.018)];
+    const reflectionPlane=new T.Plane(new T.Vector3(0,1,0),-waterLevel+.018);
+    const mirrorPlane=new T.Plane(),clipEquation=new T.Vector4(),clipCorner=new T.Vector4();
     const reflectionPixel=new T.Vector2();
     const depthReadable=renderer.capabilities.isWebGL2 || renderer.extensions.has('WEBGL_depth_texture');
     const submergedDepth=depthReadable?new T.DepthTexture(1,1,T.UnsignedIntType):null;
@@ -3103,11 +3199,17 @@
       }
       return boxes;
     }
+    const releaseIndex=lanterns.length;
     const lanternMeshes=pieces.map(([geometry,material])=>{
-      const group=new T.InstancedMesh(geometry,material,lanterns.length);
+      const group=new T.InstancedMesh(geometry,material,releaseIndex+1);
+      group.count=releaseIndex;
       group.frustumCulled=false;scene.add(reflected(group));return group;
     });
     lanterns.forEach((_,i)=>lanternMeshes[0].setColorAt(i,color(['#ffffff','#ffdcbb','#ffedc9','#ffd1ac'][i%4])));
+    lanternMeshes[0].setColorAt(releaseIndex,color('#ffe8cd'));
+    const releasedGlow=reflected(new T.Sprite(softGlow(lanternGlow.clone())));
+    releasedGlow.visible=false;
+    scene.add(releasedGlow);
     const hanging=lanterns.filter(lamp=>lamp.mountHeight>0);
     hanging.forEach((lamp,i)=>lamp.cordIndex=i);
     const rods=new T.InstancedMesh(new T.CylinderGeometry(.006,.006,1,10),lanternIron,hanging.length);
@@ -3119,6 +3221,48 @@
     const rod=new T.Object3D(),capCenter=new T.Vector3(),rodVector=new T.Vector3();
     const rodUp=new T.Vector3(0,1,0);
     const support=new T.Object3D(),localPart=new T.Object3D(),partMatrix=new T.Matrix4();
+    function placeLanternParts(index){
+      lanternMeshes.forEach((mesh,part)=>{
+        localPart.position.set(0,part===4?.088:0,0);
+        localPart.rotation.set(0,part===3?Math.PI/2:0,0);
+        localPart.updateMatrix();
+        partMatrix.multiplyMatrices(support.matrix,localPart.matrix);
+        mesh.setMatrixAt(index,partMatrix);
+      });
+    }
+    let releaseAge=null;
+    const releaseDuration=18,arrivalGlowDuration=3;
+    function showReleasedLantern(visible){
+      if(releasedGlow.visible===visible)return;
+      releasedGlow.visible=visible;
+      for(const mesh of lanternMeshes)mesh.count=releaseIndex+Number(visible);
+    }
+    function updateReleasedLantern(dt,visibility){
+      if(releaseAge===null)return;
+      const settledAge=releaseDuration+portraitRippleDuration;
+      releaseAge=reduced.matches?settledAge:Math.min(settledAge,releaseAge+dt);
+      const progress=Math.min(1,releaseAge/releaseDuration);
+      const arrivalTime=T.MathUtils.clamp((releaseAge-releaseDuration)/arrivalGlowDuration,0,1);
+      const pulse=Math.sin(arrivalTime*Math.PI)**2;
+      const sway=Math.sin(progress*Math.PI);
+      const extent=formation.scale.x;
+      const size=T.MathUtils.lerp(.76,lanternAtArrival.size*extent,T.MathUtils.smoothstep(progress,.65,1))*visibility;
+      const landingX=formation.position.x+(portraitArrival.x-.5)*skyWidth*extent;
+      const landingY=formation.position.y+(.5-portraitArrival.y)*skyHeight*extent-.31*size;
+      const landingZ=formation.position.z+lanternAtArrival.depth*extent;
+      support.position.set(T.MathUtils.lerp(ex+.34,landingX,progress)+.42*sway,
+        T.MathUtils.lerp(1.08,landingY,progress)+.26*sway,T.MathUtils.lerp(ez-3.6,landingZ,progress));
+      support.rotation.set(.045*sway,progress*2,.085*sway);
+      support.scale.setScalar(size);
+      support.updateMatrix();
+      placeLanternParts(releaseIndex);
+      for(const mesh of lanternMeshes)mesh.instanceMatrix.needsUpdate=true;
+      releasedGlow.position.copy(support.position);
+      releasedGlow.position.y+=.31*size;
+      releasedGlow.scale.setScalar(size*1.17+3.2*pulse*visibility);
+      releasedGlow.material.opacity=lanternGlow.opacity+.30*pulse;
+      showReleasedLantern(true);
+    }
     function updateLanterns(time,benchmark=false){
       nightTime.value=reduced.matches && !benchmark?0:time;
       const t=nightTime.value;
@@ -3161,11 +3305,7 @@
         }
         support.rotation.set(.04*lift,phase+.12*drift,.07*drift);
         support.scale.setScalar(size);support.updateMatrix();
-        lanternMeshes.forEach((obj,j)=>{
-          localPart.position.set(0,j===4?.088:0,0);localPart.rotation.set(0,j===3?Math.PI/2:0,0);
-          localPart.updateMatrix();partMatrix.multiplyMatrices(support.matrix,localPart.matrix);
-          obj.setMatrixAt(i,partMatrix);
-        });
+        placeLanternParts(i);
         if(mountHeight){
           capCenter.set(0,.676,0).applyMatrix4(support.matrix);
           rodVector.set(x,mountHeight-rodDrop,z).sub(capCenter);
@@ -3216,23 +3356,36 @@
     const halos=new T.InstancedMesh(new T.PlaneGeometry(1,1),softGlow(new T.MeshBasicMaterial({
       map:glowMap,transparent:true,depthWrite:false,toneMapped:false,blending:T.AdditiveBlending,opacity:.45
     })),lights.length);
+    const haloColor=new T.Color(1,1,1);
+    for(let i=0;i<lights.length;i++)halos.setColorAt(i,haloColor);
+    halos.instanceColor.setUsage(T.DynamicDrawUsage);
     halos.renderOrder=2;
     for(const mesh of [shades,hoops,halos]){
       mesh.frustumCulled=false;formation.add(reflected(mesh));
     }
     const starts=lights.map(()=>({x:rand()*9-4.5,y:rand()*1.2,z:rand()*3-1.5}));
-    function showFinale(t){
+    let coloredHalos=false;
+    function showFinale(t,dt=0){
       water.material.uniforms.portraitLight.value=T.MathUtils.smoothstep(t,0,2)*(1-T.MathUtils.smoothstep(t,8.5,12.5));
       formation.visible=t>=5.5;
-      if(!formation.visible)return;
+      if(!formation.visible){
+        showReleasedLantern(false);
+        return;
+      }
       const scale=Math.min(1.15,camera.aspect*1.65);
-      const rise=reduced.matches?0:Math.min(5,Math.max(0,t-19)*.33);
+      const rise=reduced.matches?0:2.6*T.MathUtils.smoothstep(t,19,31);
       formation.scale.setScalar(scale);
       formation.position.set(ex,6.9+rise,ez-27);
       // Fade the whole formation before the camera's far plane can slice through it.
       const distanceFade=T.MathUtils.smoothstep(camera.far-camera.position.distanceTo(formation.position),14,34);
       formation.visible=distanceFade>0;
-      if(!formation.visible)return;
+      if(!formation.visible){
+        showReleasedLantern(false);
+        return;
+      }
+      updateReleasedLantern(dt,distanceFade);
+      const rippleTime=releaseAge===null || reduced.matches?-1:releaseAge-releaseDuration;
+      const rippling=rippleTime>=0 && rippleTime<portraitRippleDuration;
       apparition.material.uniforms.reveal.value=.81*T.MathUtils.smoothstep(t,6.5,12)*distanceFade;
       for(let i=0;i<lights.length;i++){
         const p=lights[i],from=starts[i],clock=reduced.matches?0:t;
@@ -3244,9 +3397,13 @@
         matrix.rotation.set(0,p.phase,.09*Math.sin(clock*.24+p.phase));
         matrix.scale.setScalar(p.size*T.MathUtils.smoothstep(t,5.5,7.4)*distanceFade);
         matrix.updateMatrix();shades.setMatrixAt(i,matrix.matrix);hoops.setMatrixAt(i,matrix.matrix);
-        matrix.position.y+=matrix.scale.x*.3;matrix.rotation.set(0,0,0);matrix.scale.multiplyScalar(1.52);
+        const glow=rippling?portraitRipple(i,rippleTime):0;
+        matrix.position.y+=matrix.scale.x*.3;matrix.rotation.set(0,0,0);matrix.scale.multiplyScalar(1.52+2.7*glow);
+        if(rippling || coloredHalos)halos.setColorAt(i,haloColor.setRGB(1+1.9*glow,1+1.4*glow,1+.8*glow));
         matrix.updateMatrix();halos.setMatrixAt(i,matrix.matrix);
       }
+      if(rippling || coloredHalos)halos.instanceColor.needsUpdate=true;
+      coloredHalos=rippling;
       for(const mesh of [shades,hoops,halos])mesh.instanceMatrix.needsUpdate=true;
     }
     let yaw=0,pitch=0,drag=null,elapsed=-1,lastLocation=null;
@@ -3518,7 +3675,6 @@
       }
     }
     function drawWithBloom(){
-      drawSubmergedDepth();
       lightHeight.value=film.height;
       renderer.setRenderTarget(film);
       renderer.render(scene,camera);
@@ -3546,8 +3702,7 @@
       const height=Math.max(0,Math.min(1,y+ry)-Math.max(-1,y-ry));
       return width*height;
     }
-    function draw(){
-      if(!ready)return;
+    function prepareFrame(){
       camera.updateMatrixWorld();
       detailShore(camera.position);
       if(giUniforms?.riverGIEnabled.value)giEffect.update(nightTime.value);
@@ -3569,17 +3724,104 @@
         }
       }
       if(hover)updatePhotoCursor();
+    }
+    function updateReflectionCamera(){
       camera.getWorldDirection(gaze);gaze.y=-gaze.y;
       mirror.position.copy(camera.position);mirror.position.y=2*waterLevel-camera.position.y;
       mirror.lookAt(gaze.add(mirror.position));mirror.updateMatrixWorld();
       mirror.projectionMatrix.copy(camera.projectionMatrix);
       reflectionMatrix.multiplyMatrices(mirror.projectionMatrix,mirror.matrixWorldInverse);
+      // Move the mirror camera's near plane to the water surface. The
+      // reflection and the main view can then share the same shader programs.
+      mirrorPlane.copy(reflectionPlane).applyMatrix4(mirror.matrixWorldInverse);
+      clipEquation.set(mirrorPlane.normal.x,mirrorPlane.normal.y,mirrorPlane.normal.z,mirrorPlane.constant);
+      const projection=mirror.projectionMatrix.elements;
+      clipCorner.set((Math.sign(clipEquation.x)+projection[8])/projection[0],
+        (Math.sign(clipEquation.y)+projection[9])/projection[5],-1,(1+projection[10])/projection[14]);
+      const extent=clipEquation.dot(clipCorner);
+      if(extent<=.00001)return false;
+      clipEquation.multiplyScalar(2/extent);
+      projection[2]=clipEquation.x;projection[6]=clipEquation.y;
+      projection[10]=clipEquation.z+1;projection[14]=clipEquation.w;
+      mirror.projectionMatrixInverse.copy(mirror.projectionMatrix).invert();
+      return true;
+    }
+    function drawReflection(){
       lightHeight.value=reflection.height;
-      renderer.clippingPlanes=reflectionClip;
       renderer.setRenderTarget(reflection);
-      renderer.render(scene,mirror);
-      renderer.clippingPlanes=[];
+      if(!updateReflectionCamera()){
+        renderer.clear();
+        return;
+      }
+      // Keep the same light count and shader variants in both passes while
+      // preserving the reflection's existing light levels.
+      for(const light of sceneLights)light.intensity=0;
+      try{
+        renderer.render(scene,mirror);
+      }finally{
+        sceneLights.forEach((light,i)=>{light.intensity=lightLevels[i]});
+      }
+    }
+    function draw(){
+      if(!ready)return;
+      prepareFrame();
+      drawReflection();
+      drawSubmergedDepth();
       drawWithBloom();
+    }
+    const preparedShaders=new Set();
+    const shaderScene=new T.Scene();
+    shaderScene.fog=scene.fog;
+    shaderScene.environment=scene.environment;
+    // Three's compile() consults both traversals: one for lights and one for
+    // material programs. Keep the real scene lights, but prepare one group at a time.
+    let shaderObject;
+    shaderScene.traverseVisible=visit=>scene.traverseVisible(visit);
+    shaderScene.traverse=visit=>visit(shaderObject);
+    async function prepareVisibleShaders(signal){
+      camera.updateMatrixWorld();
+      detailShore(camera.position);
+      scene.updateMatrixWorld();
+      const views=updateReflectionCamera()?[camera,mirror]:[camera];
+      const frusta=views.map(view=>new T.Frustum().setFromProjectionMatrix(
+        new T.Matrix4().multiplyMatrices(view.projectionMatrix,view.matrixWorldInverse)));
+      const objects=new Map();
+      const mode=shadowVariant()+(movingActive?'-moving':'');
+      scene.traverseVisible(object=>{
+        if(!object.material || !object.geometry)return;
+        if(!views.some((view,i)=>object.layers.test(view.layers) && (!object.frustumCulled ||
+          (object.isSprite?frusta[i].intersectsSprite(object):frusta[i].intersectsObject(object)))))return;
+        const {attributes,morphAttributes}=object.geometry;
+        const materials=Array.isArray(object.material)?object.material:[object.material];
+        const key=[mode,...materials.map(material=>material.id),!!object.isInstancedMesh,!!object.instanceColor,
+          !!object.isSkinnedMesh,attributes.color?.itemSize,!!attributes.tangent,
+          !!morphAttributes.position,!!morphAttributes.normal].join('/');
+        if(!preparedShaders.has(key))objects.set(key,object);
+      });
+      const pending=[...objects];
+      if(!pending.length)return;
+      setLoadingStage('Preparing graphics shaders…','Compiling the materials visible at the entrance.');
+      setShaderProgress(0,pending.length);
+      let prepared=0;
+      while(prepared<pending.length){
+        await nextGardenFrame(signal);
+        const previousTarget=renderer.getRenderTarget();
+        renderer.setRenderTarget(film);
+        try{
+          const deadline=performance.now()+8;
+          do{
+            const [key,object]=pending[prepared++];
+            shaderObject=object;
+            renderer.compile(shaderScene,camera);
+            preparedShaders.add(key);
+          }while(prepared<pending.length && performance.now()<deadline);
+        }finally{
+          shaderObject=null;
+          renderer.setRenderTarget(previousTarget);
+        }
+        setShaderProgress(prepared,pending.length);
+      }
+      await nextGardenFrame(signal);
     }
     function resize(redraw=true){
       const w=view.clientWidth,h=view.clientHeight;
@@ -3645,18 +3887,21 @@
         ? settings.grassDensity/grassDensityScale:defaultGrassDensity;
       setGrassSetting(density);
       if(shadowValues){
-        if(settings.shadows>0)loadingStatus.textContent='Loading shadows…';
         shadowControl.value=String(settings.shadows);
-        await changeShadows(false);
+        const applied=changeShadows(false);
+        if(Array.from(assetGroups.get('shadows').files.values()).includes('pending')){
+          setLoadingStage('Loading shadow maps…','Waiting for the precomputed lantern and moon shadows to finish loading.');
+        }
+        await applied;
       }
       signal.throwIfAborted();
       if(settings.moving && movingLanterns.length){
-        await paintLoadingStage('Preparing lantern shadows…',signal);
+        await paintLoadingStage('Preparing moving shadows…','Setting up the shadows that follow drifting lanterns.',signal);
       }
       await setMovingShadows(settings.moving,false);
       signal.throwIfAborted();
       if(settings.gi && supportsGI && !giButton.hidden){
-        await paintLoadingStage('Preparing indirect lighting…',signal);
+        await paintLoadingStage('Preparing indirect lighting…','Building the lighting grid used for bounced light.',signal);
       }
       setGI(settings.gi,false);
     }
@@ -3704,13 +3949,17 @@
     }
     const smooth=sample=>sample.mean<=20 && sample.slow<=25;
     async function testViewDistance(signal){
-      await paintLoadingStage('Testing view distance…',signal);
       camera.position.set(arrivalDock[0]+.3,1.62,arrivalDock[1]-4.1);
       camera.lookAt(ex,1.5,ez);
       setViewDistance(defaultViewDistance);
+      await prepareVisibleShaders(signal);
+      await paintLoadingStage('Testing view distance…',
+        'Drawing test frames at '+defaultViewDistance+' m to measure graphics performance.',signal);
       let fullRange=await measureGraphics(signal);
       if(smooth(fullRange))return fullRange;
 
+      await paintLoadingStage('Testing view distance…',
+        'Comparing performance at the shorter '+shortViewDistance+' m range.',signal);
       setViewDistance(shortViewDistance);
       const shortRange=await measureGraphics(signal,480,0);
       signal.throwIfAborted();
@@ -3718,6 +3967,8 @@
       const improves=full=>shortRange.mean<=full.mean*.88 && shortRange.slow<=full.slow;
       if(improves(fullRange)){
         // Recheck at full range after the renderer and GPU have warmed up.
+        await paintLoadingStage('Testing view distance…',
+          'Rechecking '+defaultViewDistance+' m now that the graphics renderer is warmed up.',signal);
         fullRange=await measureGraphics(signal,480,0);
         if(!smooth(fullRange) && improves(fullRange)){
           setViewDistance(shortViewDistance);
@@ -3729,7 +3980,7 @@
     let graphicsSetup,graphicsReady=false;
     async function configureStartupGraphics(signal){
       const stored=savedGraphics();
-      loadingStatus.textContent='Setting up graphics…';
+      await paintLoadingStage('Applying graphics settings…','Setting view distance, grass density and lighting.',signal);
       await applyStartupGraphics(stored || defaultStartupGraphics,signal);
       signal.throwIfAborted();
       if(Number.isFinite(stored?.viewDistance) && !retestViewDistance)return;
@@ -3746,33 +3997,22 @@
         return;
       }
 
-      await paintLoadingStage('Testing graphics…',signal);
       if(smooth(baseline)){
-        let reference=baseline;
-        if(movingLanterns.length){
-          await setMovingShadows(true,false);
-          signal.throwIfAborted();
-          if(movingEnabled){
-            const moving=await measureGraphics(signal);
-            if(smooth(moving))reference=moving;
-            else{
-              await setMovingShadows(false,false);
-              setMovingActive(false);
-            }
-          }
-        }
+        // Moving shadows can require a large atlas and another shader variant.
+        // A first visit can enter with cached shadows; the player can opt in.
         if(supportsGI && !giButton.hidden){
-          await paintLoadingStage('Testing RTGI…',signal);
+          await paintLoadingStage('Testing indirect lighting…','Measuring the cost of ray-traced bounced light.',signal);
           setGI(true,false);
           if(giUniforms.riverGIEnabled.value){
             // Include several probe refreshes, since a high average can hide
             // hitches on the frames that update the lighting cache.
             const gi=await measureGraphics(signal,1600,350);
-            const limit=T.MathUtils.clamp(reference.worst*1.2,32,44);
+            const limit=T.MathUtils.clamp(baseline.worst*1.2,32,44);
             if(!smooth(gi) || gi.worst>limit)setGI(false,false);
           }
         }
       }else if(baseline.mean>26 && baseline.mean<160 && shadowValues?.riverShadowMode.value===3){
+        await paintLoadingStage('Comparing shadow settings…','Checking if baked shadows render faster on this device.',signal);
         shadowControl.value='1';
         await changeShadows(false);
         signal.throwIfAborted();
@@ -3815,6 +4055,21 @@
       }
     }
     const releaseControlsAt=16;
+    function canReleaseLantern(){
+      const {x,z}=camera.position;
+      return elapsed>=releaseControlsAt && !arrival && !flying &&
+        Math.abs(x-ex)<landingWidth/2 && Math.abs(z-ez)<=landingDepth/2;
+    }
+    function updateReleaseButton(){
+      const hidden=lanternReleased || !canReleaseLantern();
+      if(releaseButton.hidden!==hidden)releaseButton.hidden=hidden;
+    }
+    function releaseLantern(){
+      if(releaseAge!==null || !canReleaseLantern())return false;
+      releaseAge=0;
+      updateReleasedLantern(0,1);
+      return true;
+    }
     function beginFarewell(){
       elapsed=0;untilStep=.52;
       arrival={position:camera.position.clone(),pitch,yaw};
@@ -3822,6 +4077,7 @@
       held.clear();fastWalk=false;
       resetStick();cancelLook();
       walkPanel.inert=true;
+      updateReleaseButton();
       view.focus({preventScroll:true});
       showFinale(0);
     }
@@ -3948,8 +4204,9 @@
       guideLookTime=0;
       if(++guideTarget===guidePoints.length)beginFarewell();
     }
-    function go(index,reset=false){
+    function go(index,reset=false,redraw=true){
       if(reset){
+        releaseAge=null;
         arrival=null;walkPanel.inert=Boolean(opening);elapsed=-1;showFinale(-1);
         farewell.hidden=true;
         if(flying)setFlight(false);
@@ -3970,7 +4227,9 @@
         camera.position.set(stop.x,1.62,stop.z);
         yaw=stop.angle;pitch=.055;select(index);
       }
-      stopGuide();updatePathMemories(0);camera.rotation.set(pitch,yaw,0,'YXZ');draw();
+      updateReleaseButton();
+      stopGuide();updatePathMemories(0);camera.rotation.set(pitch,yaw,0,'YXZ');
+      if(redraw)draw();
     }
     function setFlight(enable){
       if(arrival)return false;
@@ -3988,6 +4247,7 @@
       flyButton.textContent=flying?'Fly mode on':'Fly mode off';
       dialog.classList.toggle('garden-flying',flying);
       updateDirections();
+      updateReleaseButton();
       if(flying)pathCaption('Free exploration','Fly mode');
       return true;
     }
@@ -4077,12 +4337,14 @@
         if(!flying && elapsed<0 && p.z<=overlookEntranceZ && Math.abs(p.x-ex)<landingWidth/2)beginFarewell();
       }
       if(elapsed>=0){
-        elapsed+=dt;showFinale(elapsed);
+        elapsed+=dt;showFinale(elapsed,dt);
         if(arrival)frameFarewell();
       }
       updatePathMemories(Math.min(.18,dt));
       if(!flying && !guideLookTime)updateLocation(p);
-      camera.rotation.set(pitch,yaw,0,'YXZ');updateLanterns(time);updateRowboat(nightTime.value);draw();
+      updateReleaseButton();
+      camera.rotation.set(pitch,yaw,0,'YXZ');updateLanterns(time);updateRowboat(nightTime.value);
+      draw();
     }
     function photoAt(clientX,clientY){
       const {x,y}=localPoint(canvas,clientX,clientY);
@@ -4145,10 +4407,13 @@
       updatePhotoCursor();
     });
     canvas.addEventListener('lostpointercapture',e=>{if(drag?.id===e.pointerId)cancelLook()});
-    canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();showFallback()});
+    canvas.addEventListener('webglcontextlost',e=>{
+      e.preventDefault();
+      showFallback(new Error('WebGL context lost'));
+    });
     updateRowboat(0);updateLanterns(0);resize(false);
     ready=true;
-    return {go,update,resize,cancelLook,setFlight,step(action){
+    return {go,update,resize,cancelLook,setFlight,releaseLantern,step(action){
       if(arrival)return;
       if(guidePoints.length)stopGuide();
       if(flying && (action==='ascend' || action==='descend')){
@@ -4157,7 +4422,17 @@
       }
       move(0,action==='forward'?1:action==='back'?-1:0,action==='left'?1:action==='right'?-1:0,.17);
     },initialiseGraphics,async resetScene(signal){
-      updateLanterns(0);updateRowboat(nightTime.value);go(0,true);
+      updateLanterns(0);updateRowboat(nightTime.value);go(0,true,false);
+      await prepareVisibleShaders(signal);
+      await paintLoadingStage('Preparing water reflections…','Drawing the reflected scene over the river.',signal);
+      prepareFrame();
+      drawReflection();
+      if(submergedBuffer && camera.position.y>waterLevel){
+        await paintLoadingStage('Preparing shallow water…','Rendering the riverbed depth around the banks and pilings.',signal);
+        drawSubmergedDepth();
+      }
+      await paintLoadingStage('Drawing the first view…','Uploading scene assets and rendering the entrance.',signal);
+      drawWithBloom();
       await waitForGraphicsFrame(signal);
     }};
   }
@@ -4198,9 +4473,16 @@
   }
   function showFallback(error){
     if(error)console.warn('The 3D memorial could not start:',error);
+    const stage=opening?loadingStatus.textContent.replace(/…$/,'').toLowerCase():'';
+    const message=error?.message || '';
+    const reason=/context lost/i.test(message)?'3D graphics stopped responding.':
+      /creat\w* WebGL context/i.test(message)?'This browser couldn’t start WebGL.':
+      /photo atlas unavailable/i.test(message)?'The 3D photo atlas couldn’t load.':
+      stage?'The 3D walk stopped while '+stage+'.':'The 3D walk stopped rendering.';
     opening?.abort();
     setLoading(false);
     stopFrames();walkPanel.inert=false;fallback.hidden=false;movement.hidden=true;view.hidden=true;
+    fallbackStatus.textContent=reason+' Showing the photo walk.';
     if(giButton)giButton.hidden=true;
     if(shadowControl)shadowControl.hidden=true;
     wideShadows.hidden=true;
@@ -4221,9 +4503,10 @@
       script.onerror=()=>reject(new Error('Offline photo atlas unavailable'));
       document.head.appendChild(script);
     });
-    const atlasRequest=atlasData.then(async atlas=>({atlas,atlasMap:await textureLoader.loadAsync(atlas.image)}));
+    const atlasRequest=trackLoadingAsset('photos','photo atlas',
+      atlasData.then(async atlas=>({atlas,atlasMap:await textureLoader.loadAsync(atlas.image)})));
     // Poly Haven CC0. The finish maps pack height, roughness and grain.
-    const optionalTexture=src=>textureLoader.loadAsync(src).catch(()=>null);
+    const optionalTexture=(group,src)=>trackLoadingAsset(group,src,textureLoader.loadAsync(src).catch(()=>null));
     const optionalModel=(src,read)=>{
       const existing=read();
       return existing?Promise.resolve(existing):new Promise(resolve=>{
@@ -4235,25 +4518,26 @@
       });
     };
     const barkTextures=name=>Promise.all(['bark','normal','roughness'].map(
-      kind=>optionalTexture('materials/ez-tree-'+name+'-'+kind+'.webp')
+      kind=>optionalTexture('foliage','materials/ez-tree-'+name+'-'+kind+'.webp')
     )).then(([map,normalMap,roughnessMap])=>({map,normalMap,roughnessMap}));
     const landscapeRequest=Promise.all([
-      optionalModel('materials/ez-tree-landscape.js?v=shoreline',()=>typeof riverStockLandscape==='undefined'?null:riverStockLandscape),
-      optionalTexture('materials/ez-tree-needles.webp?v=stock'),
-      optionalTexture('materials/ez-tree-ash-leaves.webp'),
-      optionalTexture('materials/ez-tree-aspen-leaves.webp'),
+      trackLoadingAsset('foliage','tree models',
+        optionalModel('materials/ez-tree-landscape.js?v=shoreline',()=>typeof riverStockLandscape==='undefined'?null:riverStockLandscape)),
+      optionalTexture('foliage','materials/ez-tree-needles.webp?v=stock'),
+      optionalTexture('foliage','materials/ez-tree-ash-leaves.webp'),
+      optionalTexture('foliage','materials/ez-tree-aspen-leaves.webp'),
       barkTextures('pine'),barkTextures('ash')
     ]).then(([presets,pine,ash,aspen,Bark003,Bark001])=>
       presets?{presets,leaves:{pine,ash,aspen},bark:{Bark003,Bark001}}:null);
     gardenAssets=Promise.all([
       atlasRequest,
-      location.protocol==='file:'?null:optionalTexture('photos/01.webp'),
-      optionalTexture('materials/wood-finish.webp?v=2'),
-      optionalTexture('materials/slate-finish.webp'),
-      optionalTexture('materials/deck-color.webp'),
-      optionalTexture('materials/river-painted-slate.webp'),
-      optionalTexture('materials/river-forest-floor.webp'),
-      optionalTexture('materials/pavilion-timber.webp'),
+      location.protocol==='file:'?null:optionalTexture('photos','photos/01.webp'),
+      optionalTexture('surfaces','materials/wood-finish.webp?v=2'),
+      optionalTexture('surfaces','materials/slate-finish.webp'),
+      optionalTexture('surfaces','materials/deck-color.webp'),
+      optionalTexture('surfaces','materials/river-painted-slate.webp'),
+      optionalTexture('surfaces','materials/river-forest-floor.webp'),
+      optionalTexture('surfaces','materials/pavilion-timber.webp'),
       landscapeRequest
     ]).catch(error=>{
       gardenAssets=null;
@@ -4266,8 +4550,23 @@
     opening?.abort();
     const session=new AbortController(),{signal}=session;
     opening=session;
-    loadingStatus.textContent='Loading the memorial…';
+    if(!garden && !fallback.hidden){
+      fallback.hidden=true;
+      movement.hidden=false;
+      view.hidden=false;
+    }
+    cancelAnimationFrame(fallbackRippleFrame);
+    lanternReleased=false;
+    releaseButton.hidden=true;
+    releaseStatus.textContent='';
+    fallbackLantern.hidden=true;
     setLoading(true);
+    loadingAssets.hidden=Boolean(garden);
+    if(garden){
+      setLoadingStage('Opening the memorial…','Reusing the scene that is already loaded.');
+    }else{
+      setLoadingStage('Loading scene files…','Downloading and decoding the files needed for the walk.');
+    }
     dialog.showModal();
     select(0);
     try{
@@ -4279,12 +4578,11 @@
         const shadowMode=(savedGraphics() || defaultStartupGraphics).shadows;
         if(supportsShadows && shadowMode>0)loadShadowMaps(shadowMode).catch(()=>{});
         const [{atlas,atlasMap},finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape]=await assets;
-        await paintLoadingStage('Preparing the river…',signal);
+        await paintLoadingStage('Building the 3D scene…','Assembling the boardwalk, pavilions, shoreline and lanterns on this device.',signal);
         garden=makeGarden(atlas,{atlasMap,finalePhoto,wood,slate,deck,paintedStone,forestFloor,pavilionTimber,stockLandscape});
       }
       garden.resize(false);
       await garden.initialiseGraphics(signal);
-      await paintLoadingStage('Rendering the river…',signal);
       await garden.resetScene(signal);
       signal.throwIfAborted();
       setLoading(false,true);
@@ -4328,6 +4626,7 @@
   dialog.addEventListener('close',()=>{
     if(dialog.open)return;
     opening?.abort();opening=null;
+    cancelAnimationFrame(fallbackRippleFrame);
     setSettingsOpen(false);
     setLoading(false);
     stopFrames();pauseMusic();music.currentTime=0;
@@ -4345,6 +4644,21 @@
       if(garden && fallback.hidden)garden.go(index);else select(index);
     };
   }
+  releaseButton.addEventListener('click',()=>{
+    if(releaseButton.hidden || lanternReleased || walkPanel.inert)return;
+    if(fallback.hidden){
+      if(!garden?.releaseLantern())return;
+    }else{
+      fallbackLantern.hidden=false;
+      startFallbackRipple();
+    }
+    lanternReleased=true;
+    if(document.activeElement===releaseButton){
+      (fallback.hidden?view:enlarge).focus({preventScroll:true});
+    }
+    releaseButton.hidden=true;
+    releaseStatus.textContent='Lantern released';
+  });
   const keys={KeyW:'forward',KeyS:'back',KeyA:'strafeLeft',KeyD:'strafeRight',
               ArrowUp:'forward',ArrowDown:'back',ArrowLeft:'left',ArrowRight:'right',
               KeyQ:'left',KeyE:'right'};
